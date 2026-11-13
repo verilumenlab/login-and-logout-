@@ -47,6 +47,10 @@ COPY --from=builder /install /usr/local
 RUN groupadd -g 10001 appgroup && \
     useradd -u 10000 -g appgroup -s /sbin/nologin -d /app appuser
 
+# Bump this when a deploy must ignore a stale COPY cache on Render
+ARG APP_SOURCE_BUST=2026-11-13-admin-reset-v3
+RUN echo "app-source-bust=${APP_SOURCE_BUST}"
+
 # Copy application source code and migrations
 COPY . /app
 
