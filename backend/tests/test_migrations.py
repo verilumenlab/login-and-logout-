@@ -6,9 +6,22 @@ import os
 import pathlib
 
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect
 
 from alembic import command
+
+
+def test_revision_ids_fit_alembic_version_column():
+    """alembic_version.version_num is VARCHAR(32); PostgreSQL rejects longer IDs (SQLite does not)."""
+    base_dir = pathlib.Path(__file__).parent.parent
+    alembic_cfg = Config(str(base_dir / "alembic.ini"))
+    alembic_cfg.set_main_option("script_location", str(base_dir / "alembic"))
+
+    too_long = [
+        rev.revision for rev in ScriptDirectory.from_config(alembic_cfg).walk_revisions() if len(rev.revision) > 32
+    ]
+    assert too_long == []
 
 
 def test_alembic_upgrade_and_downgrade():

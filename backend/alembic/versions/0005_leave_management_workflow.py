@@ -1,7 +1,7 @@
 """Leave Management Workflow Enhancements Migration (Phase 09)
 
 Revision ID: 0005_leave_workflow
-Revises: 0004_location_office_enhancements
+Revises: 0004_location_office
 Create Date: 2026-11-12 18:00:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = '0005_leave_workflow'
-down_revision: Union[str, None] = '0004_location_office_enhancements'
+down_revision: Union[str, None] = '0004_location_office'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

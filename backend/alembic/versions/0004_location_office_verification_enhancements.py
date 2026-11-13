@@ -1,6 +1,6 @@
 """Location and Office Verification Enhancements Migration (Phase 08)
 
-Revision ID: 0004_location_office_enhancements
+Revision ID: 0004_location_office
 Revises: 0003_attendance_engine
 Create Date: 2026-11-12 17:00:00.000000
 
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision: str = '0004_location_office_enhancements'
+revision: str = '0004_location_office'
 down_revision: Union[str, None] = '0003_attendance_engine'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
