@@ -45,6 +45,8 @@ yarn-error.log*
 web/.next/
 web/out/
 desktop/dist/
+desktop/.vite/
+.vite/
 
 # Rust / Tauri
 desktop/src-tauri/target/
