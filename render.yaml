@@ -15,10 +15,12 @@ services:
     dockerContext: ./backend
     dockerCommand: sh scripts/render-start.sh
     healthCheckPath: /api/v1/health
-    autoDeploy: true
+    # Redeploy automatically when GitHub main gets a push that touches backend/
+    autoDeployTrigger: commit
     buildFilter:
       paths:
         - backend/**
+        - render.yaml
     envVars:
       - key: ENVIRONMENT
         value: production

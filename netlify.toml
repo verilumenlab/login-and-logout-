@@ -1,6 +1,7 @@
 # Web portal (HR / Admin / Manager), deployed as a static export.
-# The FastAPI backend is deployed separately (see backend/render.yaml); point NEXT_PUBLIC_API_URL at it
-# in Netlify > Site configuration > Environment variables, e.g. https://your-api.example.com/api/v1
+# Auto-deploy: connect this GitHub repo in Netlify (Site configuration → Build & deploy →
+# Continuous deployment), or use the NETLIFY_BUILD_HOOK GitHub Action secret.
+# Required env var: NEXT_PUBLIC_API_URL = https://workpulse-api-pm0x.onrender.com/api/v1
 [build]
   base = "web"
   command = "npm run build"
@@ -9,6 +10,7 @@
 [build.environment]
   NODE_VERSION = "20"
   NEXT_TELEMETRY_DISABLED = "1"
+  # Set in Netlify UI (not here): NEXT_PUBLIC_API_URL=https://workpulse-api-pm0x.onrender.com/api/v1
 
 [[headers]]
   for = "/*"
