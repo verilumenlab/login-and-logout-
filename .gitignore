@@ -72,3 +72,6 @@ local_data/
 backend/storage/
 *.xlsx
 
+
+# Built employee installers
+installer/
