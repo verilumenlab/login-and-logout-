@@ -12,19 +12,19 @@ from datetime import UTC, date, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
-from pydantic import BaseModel
 from openpyxl import load_workbook
+from pydantic import BaseModel
 from sqlalchemy import delete, desc, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.core.file_security import sanitize_filename, validate_file_content
 from app.core.dependencies import (
     check_employee_record_access,
     get_current_active_user,
     require_role,
 )
+from app.core.file_security import sanitize_filename, validate_file_content
 from app.core.security import get_password_hash
 from app.models.auth import AuditLog, RefreshToken, Role, User
 from app.models.department import Department
@@ -43,6 +43,11 @@ from app.schemas.employee import (
 )
 
 router = APIRouter()
+
+
+def _temporary_password() -> str:
+    """Random first-login password; it is emailed to the employee and never shared between accounts."""
+    return f"Welcome@{secrets.token_hex(5)}A1!"
 
 
 async def _resolve_employee_response(emp: EmployeeProfile, db: AsyncSession) -> EmployeeResponse:
@@ -362,7 +367,7 @@ async def create_employee(
             )
 
     # 8. Create User Account (Argon2id password)
-    raw_password = payload.initial_password or "ChangeMe123!"
+    raw_password = payload.initial_password or _temporary_password()
     user = User(
         organization_id=current_user.organization_id,
         email=clean_email,
@@ -974,10 +979,11 @@ async def import_employees(
             continue
 
         # Create User & EmployeeProfile
+        temporary_password = _temporary_password()
         new_user = User(
             organization_id=current_user.organization_id,
             email=email,
-            hashed_password=get_password_hash("WelcomeTitan123!"),
+            hashed_password=get_password_hash(temporary_password),
             role_id=emp_role.id,
             is_active=True,
         )
@@ -1017,6 +1023,15 @@ async def import_employees(
                 )
                 db.add(mgr_link)
 
+        try:
+            from app.services.email_service import EmailService
+            await EmailService.notify_employee_account_creation(
+                db=db,
+                employee_id=new_profile.id,
+                temporary_password=temporary_password,
+            )
+        except Exception:
+            pass
         created_records.append(new_profile)
 
     # Audit bulk import

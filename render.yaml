@@ -1,0 +1,83 @@
+# WorkPulse backend on Render (Blueprint). Web portal is on Netlify, employee app is the desktop installer.
+# Render dashboard > New > Blueprint > pick this repo. You will be asked for the values marked sync: false.
+#
+# Plans: "free" works for testing, but a free web service sleeps after 15 idle minutes (first request then takes
+# ~1 minute and the Friday report can be missed) and a free database expires after 30 days.
+# For real use switch the web service to "starter" and the database to "basic-256mb".
+
+services:
+  - type: web
+    name: workpulse-api
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: sh scripts/render-start.sh
+    healthCheckPath: /api/v1/health
+    autoDeploy: true
+    buildFilter:
+      paths:
+        - backend/**
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: workpulse-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: workpulse-redis
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: keyvalue
+          name: workpulse-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: keyvalue
+          name: workpulse-redis
+          property: connectionString
+      - key: BACKEND_CORS_ORIGINS
+        value: '["https://magnificent-kangaroo-07d13a.netlify.app","tauri://localhost","http://tauri.localhost","https://tauri.localhost"]'
+      - key: BACKEND_CORS_ORIGIN_REGEX
+        value: ^https://([a-z0-9-]+--)?magnificent-kangaroo-07d13a\.netlify\.app$
+      - key: FRONTEND_BASE_URL
+        value: https://magnificent-kangaroo-07d13a.netlify.app
+      - key: FORWARDED_ALLOW_IPS
+        value: "*" # Render only exposes the service through its proxy
+      # First-run setup (app/bootstrap.py): creates the organization and the first administrator.
+      - key: BOOTSTRAP_ORG_NAME
+        sync: false
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+      # Email for the Friday report and leave notifications: "console" (log only), "smtp" or "resend".
+      - key: EMAIL_PROVIDER
+        value: console
+      - key: RESEND_API_KEY
+        sync: false
+      - key: DEFAULT_FROM_EMAIL
+        sync: false
+
+  - type: keyvalue
+    name: workpulse-redis
+    plan: free
+    region: singapore
+    maxmemoryPolicy: noeviction
+    ipAllowList: [] # internal connections only
+
+databases:
+  - name: workpulse-db
+    plan: free
+    region: singapore
+    databaseName: workpulse
+    user: workpulse

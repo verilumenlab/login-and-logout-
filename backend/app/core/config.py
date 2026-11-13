@@ -7,6 +7,14 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _with_driver(url: str, driver: str) -> str:
+    """Render/Heroku give postgres:// or postgresql:// URLs; SQLAlchemy needs an explicit driver."""
+    for prefix in ("postgres://", "postgresql://", "postgresql+asyncpg://", "postgresql+psycopg2://"):
+        if url.startswith(prefix):
+            return f"postgresql+{driver}://" + url[len(prefix):]
+    return url
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=(".env", "../.env"),
@@ -100,7 +108,7 @@ class Settings(BaseSettings):
     def get_async_database_url(self) -> str:
         """Returns the async database URL, defaulting to postgresql+asyncpg or sqlite+aiosqlite."""
         if self.DATABASE_URL:
-            return self.DATABASE_URL
+            return _with_driver(self.DATABASE_URL, "asyncpg")
         return (
             f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@"
             f"{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
@@ -112,6 +120,8 @@ class Settings(BaseSettings):
             return self.SYNC_DATABASE_URL
         if self.DATABASE_URL and self.DATABASE_URL.startswith("sqlite"):
             return self.DATABASE_URL.replace("sqlite+aiosqlite://", "sqlite://")
+        if self.DATABASE_URL:
+            return _with_driver(self.DATABASE_URL, "psycopg2")
         return (
             f"postgresql+psycopg2://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@"
             f"{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
