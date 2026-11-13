@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import io
 import uuid
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 
 import pytest
 from httpx import AsyncClient
@@ -18,9 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_password_hash
 from app.core.seeds import seed_permissions, seed_system_roles
-from app.models.auth import AuditLog, Role, User
+from app.models.auth import AuditLog, User
 from app.models.department import Department
-from app.models.employee import EmployeeProfile, EmploymentStatus, ManagerAssignment
+from app.models.employee import EmployeeProfile, EmploymentStatus
 from app.models.organization import Organization
 from app.models.schedule import WorkSchedule
 
@@ -345,6 +345,81 @@ async def test_edit_employee_profile_and_manager_assignment(
     assert "job_title" in audit.diff_json
 
 
+@pytest.mark.asyncio
+async def test_admin_assigns_portal_roles(client: AsyncClient, setup_employee_env: dict):
+    env = setup_employee_env
+    login = await client.post("/api/v1/auth/login", json={"email": env["admin_email"], "password": "AdminPass123!"})
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    emp_id = env["emp_profile"].id
+
+    detail = await client.get(f"/api/v1/employees/{emp_id}", headers=headers)
+    assert detail.json()["role_name"] == "Employee"
+
+    promote = await client.put(f"/api/v1/employees/{emp_id}", headers=headers, json={"role_name": "HR Manager"})
+    assert promote.status_code == 200
+    assert promote.json()["role_name"] == "HR Manager"
+
+    # The promoted account can now use the web portal's HR features.
+    hr_login = await client.post("/api/v1/auth/login", json={"email": env["emp_email"], "password": "EmpPass123!"})
+    assert hr_login.status_code == 200
+    assert hr_login.json()["user"]["role"] == "HR Manager"
+
+    created = await client.post(
+        "/api/v1/employees/",
+        headers=headers,
+        json={
+            "first_name": "Maya",
+            "last_name": "Lead",
+            "email": f"maya_{env['uid']}@vanguard.com",
+            "employee_code": f"ML-{env['uid']}",
+            "hire_date": "2025-01-01",
+            "role_name": "Department Manager",
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["role_name"] == "Department Manager"
+
+    unknown = await client.put(f"/api/v1/employees/{emp_id}", headers=headers, json={"role_name": "Wizard"})
+    assert unknown.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_hr_cannot_grant_admin_or_change_own_role(client: AsyncClient, setup_employee_env: dict):
+    env = setup_employee_env
+    login = await client.post("/api/v1/auth/login", json={"email": env["hr_email"], "password": "HrPass123!"})
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    escalate = await client.put(
+        f"/api/v1/employees/{env['emp_profile'].id}", headers=headers, json={"role_name": "Administrator"}
+    )
+    assert escalate.status_code == 403
+
+    create_admin = await client.post(
+        "/api/v1/employees/",
+        headers=headers,
+        json={
+            "first_name": "Sneaky",
+            "last_name": "Admin",
+            "email": f"sneaky_{env['uid']}@vanguard.com",
+            "employee_code": f"SA-{env['uid']}",
+            "hire_date": "2025-01-01",
+            "role_name": "Administrator",
+        },
+    )
+    assert create_admin.status_code == 403
+
+    own = await client.put(
+        f"/api/v1/employees/{env['hr_profile'].id}", headers=headers, json={"role_name": "Department Manager"}
+    )
+    assert own.status_code == 403
+
+    promote_mgr = await client.put(
+        f"/api/v1/employees/{env['emp_profile'].id}", headers=headers, json={"role_name": "Department Manager"}
+    )
+    assert promote_mgr.status_code == 200
+    assert promote_mgr.json()["role_name"] == "Department Manager"
+
+
 # ============================================================================
 # 4. Activate & Deactivate Employee Lifecycle
 # ============================================================================
@@ -545,3 +620,67 @@ async def test_unauthorized_employee_cannot_manage_personnel(client: AsyncClient
     # 5. Standard employee CANNOT create department
     r_dept = await client.post("/api/v1/departments/", headers=emp_headers, json={"name": "Hacked Dept", "code": "HACK"})
     assert r_dept.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_hr_cannot_see_or_assign_system_administrator(
+    client: AsyncClient, db_session: AsyncSession, setup_employee_env: dict
+):
+    """System Administrator (is_superuser) is hidden from HR directory and create pickers."""
+    env = setup_employee_env
+    admin_profile = EmployeeProfile(
+        organization_id=env["org"].id,
+        user_id=env["admin_user"].id,
+        employee_code="ADMIN-001",
+        first_name="System",
+        last_name="Administrator",
+        hire_date=date(2024, 1, 1),
+        employment_status=EmploymentStatus.ACTIVE,
+    )
+    db_session.add(admin_profile)
+    await db_session.commit()
+    await db_session.refresh(admin_profile)
+
+    hr_login = await client.post("/api/v1/auth/login", json={"email": env["hr_email"], "password": "HrPass123!"})
+    hr_headers = {"Authorization": f"Bearer {hr_login.json()['access_token']}"}
+
+    listed = await client.get("/api/v1/employees/?page_size=100", headers=hr_headers)
+    assert listed.status_code == 200
+    ids = {item["id"] for item in listed.json()["items"]}
+    assert str(admin_profile.id) not in ids
+    assert str(env["emp_profile"].id) in ids
+    assert all(item["employee_code"] != "ADMIN-001" for item in listed.json()["items"])
+
+    detail = await client.get(f"/api/v1/employees/{admin_profile.id}", headers=hr_headers)
+    assert detail.status_code == 404
+
+    assign = await client.post(
+        "/api/v1/employees/",
+        headers=hr_headers,
+        json={
+            "first_name": "New",
+            "last_name": "Hire",
+            "email": f"newhire_{env['uid']}@vanguard.com",
+            "employee_code": f"NH-{env['uid']}",
+            "hire_date": "2025-06-01",
+            "manager_id": str(admin_profile.id),
+        },
+    )
+    assert assign.status_code == 400
+    assert "System Administrator" in assign.json()["detail"]
+
+    admin_login = await client.post(
+        "/api/v1/auth/login", json={"email": env["admin_email"], "password": "AdminPass123!"}
+    )
+    admin_headers = {"Authorization": f"Bearer {admin_login.json()['access_token']}"}
+    admin_list = await client.get("/api/v1/employees/?page_size=100", headers=admin_headers)
+    assert admin_list.status_code == 200
+    admin_ids = {item["id"] for item in admin_list.json()["items"]}
+    assert str(env["emp_profile"].id) in admin_ids
+    assert str(admin_profile.id) in admin_ids
+    emp_role = next(i for i in admin_list.json()["items"] if i["id"] == str(env["emp_profile"].id))
+    assert emp_role["role_name"] == "Employee"
+
+    emp_detail = await client.get(f"/api/v1/employees/{env['emp_profile'].id}", headers=admin_headers)
+    assert emp_detail.status_code == 200
+    assert emp_detail.json()["full_name"].startswith("Evan")

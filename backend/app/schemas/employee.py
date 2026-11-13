@@ -72,6 +72,7 @@ class EmployeeUpdate(BaseModel):
     termination_date: date | None = None
     employment_status: EmploymentStatus | None = None
     is_active: bool | None = None
+    role_name: str | None = None
 
 
 class EmployeeResponse(BaseModel):
@@ -95,6 +96,7 @@ class EmployeeResponse(BaseModel):
     termination_date: date | None = None
     employment_status: EmploymentStatus
     is_active: bool
+    role_name: str | None = None
     manager: EmployeeManagerInfo | None = None
     hr_rep: EmployeeManagerInfo | None = None
     metadata_json: dict[str, Any] | None = None

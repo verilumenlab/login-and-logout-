@@ -796,22 +796,129 @@ class ExcelReportEngine:
         exceptions_data: list[dict[str, Any]] | None = None,
     ) -> tuple[str, str, int]:
         """
-        Generates the Prompt 17 mandatory 9-worksheet weekly consolidated Excel report:
-        1. Attendance Summary
-        2. Login & Logout Details
-        3. Working Hours
-        4. Late Attendance
-        5. Absence Report
-        6. Leave Applications
-        7. Leave Approvals
-        8. Wi-Fi Verification
-        9. Attendance Exceptions
+        Generates the weekly consolidated Excel report:
+        1. Daily Login (simple 10-column sheet for HR/Manager)
+        2. Attendance Summary
+        3. Login & Logout Details
+        4. Working Hours
+        5. Late Attendance
+        6. Absence Report
+        7. Leave Applications
+        8. Leave Approvals
+        9. Wi-Fi Verification
+        10. Attendance Exceptions
         """
         wb = openpyxl.Workbook()
         wb.remove(wb.active)
 
         # -------------------------------------------------------------
-        # Worksheet 1: Attendance Summary
+        # Worksheet 1: Daily Login (screenshot-matching HR/Manager view)
+        # -------------------------------------------------------------
+        ws_daily = wb.create_sheet(title="Daily Login", index=0)
+        ws_daily.views.sheetView[0].showGridLines = True
+
+        daily_headers = [
+            "Date",
+            "Code",
+            "Name",
+            "Department",
+            "Status",
+            "Login",
+            "Logout",
+            "Hours",
+            "First Wi-Fi",
+            "Wi-Fi networks",
+        ]
+        for col_idx, h in enumerate(daily_headers, start=1):
+            c = ws_daily.cell(row=1, column=col_idx, value=h)
+            c.font = FONT_HEADER
+            c.fill = FILL_HEADER
+            c.alignment = ALIGN_CENTER
+            c.border = BORDER_CELL
+        ws_daily.row_dimensions[1].height = 22
+
+        def _daily_date(val: Any) -> str:
+            raw = str(val or "").strip()
+            if not raw:
+                return ""
+            for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y"):
+                try:
+                    return datetime.strptime(raw[:10], fmt).strftime("%d-%m-%Y")
+                except ValueError:
+                    continue
+            return raw
+
+        def _daily_hours(log: dict[str, Any]) -> str:
+            explicit = log.get("work_duration")
+            if isinstance(explicit, str) and explicit.strip():
+                return explicit.strip()
+            hours = float(log.get("net_hours", log.get("net_duration_hours", 0.0)) or 0.0)
+            total_mins = int(round(hours * 60))
+            return f"{total_mins // 60}h {total_mins % 60:02d}m"
+
+        def _daily_status(log: dict[str, Any]) -> str:
+            status = str(log.get("status") or "").upper()
+            clock_out = str(log.get("clock_out") or "")
+            if clock_out.lower().startswith("still logged") or status in ("OPEN",):
+                return "Logged in"
+            if status in ("PRESENT", "LATE", "HALF_DAY"):
+                return "Logged in" if not clock_out else status.title().replace("_", " ")
+            if status == "ABSENT":
+                return "Absent"
+            if status == "LEAVE":
+                return "On leave"
+            return status.title().replace("_", " ") if status else ""
+
+        def _daily_wifi(val: Any) -> str:
+            raw = str(val or "").strip()
+            if not raw:
+                return ""
+            parts = [p.strip() for p in raw.replace(",", "/").split("/") if p.strip()]
+            return " / ".join(dict.fromkeys(parts))
+
+        curr_daily = 2
+        for log in attendance_logs:
+            logout_val = log.get("clock_out") or ""
+            if str(logout_val).lower().startswith("still logged"):
+                logout_val = "Still logged"
+
+            row_vals = [
+                _daily_date(log.get("date") or log.get("work_date")),
+                log.get("employee_code", ""),
+                log.get("employee_name", ""),
+                log.get("department", ""),
+                _daily_status(log),
+                log.get("clock_in", "") or "",
+                logout_val,
+                _daily_hours(log),
+                log.get("first_wifi_connected", "") or "",
+                _daily_wifi(log.get("wifi_networks")),
+            ]
+            for col_idx, val in enumerate(row_vals, start=1):
+                cell = ws_daily.cell(row=curr_daily, column=col_idx, value=val)
+                cell.font = FONT_REGULAR
+                cell.border = BORDER_CELL
+                cell.alignment = ALIGN_CENTER if col_idx in (1, 2, 5, 6, 7, 8, 9) else ALIGN_LEFT
+            curr_daily += 1
+
+        # Fixed widths so Login / First Wi-Fi never show as ########
+        daily_widths = {
+            "A": 12,
+            "B": 10,
+            "C": 18,
+            "D": 14,
+            "E": 12,
+            "F": 12,
+            "G": 12,
+            "H": 10,
+            "I": 12,
+            "J": 36,
+        }
+        for col_letter, width in daily_widths.items():
+            ws_daily.column_dimensions[col_letter].width = width
+
+        # -------------------------------------------------------------
+        # Worksheet 2: Attendance Summary
         # -------------------------------------------------------------
         ws_sum = wb.create_sheet(title="Attendance Summary")
         ws_sum.views.sheetView[0].showGridLines = True

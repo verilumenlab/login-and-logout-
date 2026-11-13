@@ -97,7 +97,9 @@ async def list_email_outbox(
     recipient: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    current_user: User = Depends(require_role(["Admin", "Super Admin", "HR"])),
+    current_user: User = Depends(
+        require_role(["Admin", "Administrator", "Super Admin", "HR", "HR Manager"])
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> Sequence[EmailOutbox]:
     """
@@ -123,7 +125,9 @@ async def list_email_outbox(
 @router.get("/outbox/{outbox_id}", response_model=EmailOutboxResponse)
 async def get_email_outbox_entry(
     outbox_id: uuid.UUID,
-    current_user: User = Depends(require_role(["Admin", "Super Admin", "HR"])),
+    current_user: User = Depends(
+        require_role(["Admin", "Administrator", "Super Admin", "HR", "HR Manager"])
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> EmailOutbox:
     """Retrieve full audit record and delivery logs for a specific email."""
@@ -148,7 +152,9 @@ async def get_email_outbox_entry(
 @router.post("/outbox/{outbox_id}/retry", response_model=EmailOutboxResponse)
 async def retry_failed_email(
     outbox_id: uuid.UUID,
-    current_user: User = Depends(require_role(["Admin", "Super Admin", "HR"])),
+    current_user: User = Depends(
+        require_role(["Admin", "Administrator", "Super Admin", "HR", "HR Manager"])
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> EmailOutbox:
     """Manually re-triggers transmission for a failed or pending outbox email."""
@@ -265,7 +271,9 @@ async def send_test_email(
 @router.post("/process-queue")
 async def trigger_process_queue(
     limit: int = Query(default=50, ge=1, le=100),
-    current_user: User = Depends(require_role(["Admin", "Super Admin", "HR"])),
+    current_user: User = Depends(
+        require_role(["Admin", "Administrator", "Super Admin", "HR", "HR Manager"])
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Manually flushes the pending email outbox queue."""

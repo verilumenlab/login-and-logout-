@@ -378,7 +378,7 @@ export default function EmployeeDetailsPage() {
               >
                 <option value="">No Manager</option>
                 {allEmployees
-                  .filter((e) => e.id !== employee.id)
+                  .filter((e) => e.id !== employee.id && e.employee_code !== 'ADMIN-001')
                   .map((e) => (
                     <option key={e.id} value={e.id}>
                       {e.full_name} ({e.employee_code})
@@ -395,7 +395,7 @@ export default function EmployeeDetailsPage() {
               >
                 <option value="">Select HR Representative</option>
                 {allEmployees
-                  .filter((e) => e.id !== employee.id)
+                  .filter((e) => e.id !== employee.id && e.employee_code !== 'ADMIN-001')
                   .map((e) => (
                     <option key={e.id} value={e.id}>
                       {e.full_name} ({e.employee_code})

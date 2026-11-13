@@ -591,7 +591,7 @@ async def test_attendance_daily_weekly_monthly_digests(setup_notification_env, d
         stats={"scope": "Team Alpha", "attendance_rate": 98.0, "total_working_hours": 480.0, "total_break_hours": 50.0, "resolved_leaves": 3},
     )
     assert w_outbox.status == OutboxStatus.SENT
-    assert "Weekly Attendance" in w_outbox.subject
+    assert "Weekly login status" in w_outbox.subject
 
     # Monthly
     m_outbox = await EmailService.notify_attendance_report(

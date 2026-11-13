@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.auth import Role, User
 from app.models.organization import Organization
 from app.models.reporting import ReportFile, ReportJob, ReportSchedule, ReportStatus, ReportType
@@ -406,12 +407,18 @@ class ReportSchedulerService:
                 date_str = period_key if schedule_type != ReportType.WEEKLY else f"{start_date} to {end_date}"
 
                 org_stats = dataset.stats(f"{org.name} Organization")
-                for recipient in await cls.get_org_report_recipients(db, organization_id):
+                mailed: set[str] = set()
+
+                async def _send_org_workbook(email: str, name: str) -> None:
+                    key = email.strip().lower()
+                    if not key or key in mailed:
+                        return
+                    mailed.add(key)
                     await EmailService.notify_attendance_report(
                         db=db,
                         organization_id=organization_id,
-                        recipient_email=recipient.email,
-                        recipient_name=recipient.full_name or "HR Administrator",
+                        recipient_email=email.strip(),
+                        recipient_name=name,
                         report_frequency=schedule_type.value,
                         date_str=date_str,
                         stats=org_stats,
@@ -419,9 +426,31 @@ class ReportSchedulerService:
                         attachment_filename=hr_file.file_name,
                     )
 
+                for recipient in await cls.get_org_report_recipients(db, organization_id):
+                    await _send_org_workbook(
+                        recipient.email,
+                        recipient.full_name or "HR Administrator",
+                    )
+
+                # Always include configured HR + Manager addresses with the FULL org Excel
+                # (Daily Login sheet + consolidated worksheets) for WEEKLY digests.
+                if schedule_type == ReportType.WEEKLY:
+                    for addr in (
+                        *(p.strip() for p in settings.WEEKLY_REPORT_HR_EMAILS.split(",") if p.strip()),
+                    ):
+                        await _send_org_workbook(addr, "HR")
+                    for addr in (
+                        *(p.strip() for p in settings.WEEKLY_REPORT_MANAGER_EMAILS.split(",") if p.strip()),
+                    ):
+                        await _send_org_workbook(addr, "Manager")
+
                 for m_id, (m_file, team) in manager_files.items():
                     mgr = emp_map.get(m_id)
                     if mgr and mgr.user and mgr.user.email and mgr.user.is_active:
+                        key = mgr.user.email.strip().lower()
+                        if key in mailed:
+                            continue
+                        mailed.add(key)
                         await EmailService.notify_attendance_report(
                             db=db,
                             organization_id=organization_id,

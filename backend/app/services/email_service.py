@@ -1105,6 +1105,10 @@ class EmailService:
                 "total_working_hours": stats.get("total_working_hours", 40.0),
                 "total_break_hours": stats.get("total_break_hours", 5.0),
                 "resolved_leaves": stats.get("resolved_leaves", 1),
+                "employees_logged_in": stats.get("employees_logged_in", 0),
+                "employees_no_login": stats.get("employees_no_login", 0),
+                "active_headcount": stats.get("active_headcount", 0),
+                "login_summary_html": stats.get("login_summary_html", ""),
             }
         else:
             template_key = "attendance_monthly_report"

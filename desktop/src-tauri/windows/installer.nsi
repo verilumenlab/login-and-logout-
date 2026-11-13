@@ -30,9 +30,32 @@ RequestExecutionLevel admin
 
 Section "MainSection" SEC01
     SetOutPath "$INSTDIR"
-    File /r "..\target\release\enterprise-attendance-desktop.exe"
-    File /r "..\target\release\*.dll"
-    
+    ; Always ship the exe + runtime DLLs together (bare exe alone fails on employee PCs)
+    File "..\target\release\enterprise-attendance-desktop.exe"
+    File /nonfatal "..\target\release\WebView2Loader.dll"
+    File /nonfatal "..\target\release\libunwind.dll"
+    File /nonfatal "..\target\release\*.dll"
+
+    ; Download + install Microsoft Edge WebView2 Runtime if missing
+    DetailPrint "Checking Microsoft Edge WebView2 Runtime..."
+    ReadRegStr $0 HKLM "SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
+    ${If} $0 == ""
+      ReadRegStr $0 HKLM "SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
+    ${EndIf}
+    ${If} $0 == ""
+      DetailPrint "WebView2 missing — downloading bootstrapper..."
+      NSISdl::download "https://go.microsoft.com/fwlink/p/?LinkId=2124703" "$TEMP\MicrosoftEdgeWebview2Setup.exe"
+      Pop $R0
+      ${If} $R0 == "success"
+        ExecWait '"$TEMP\MicrosoftEdgeWebview2Setup.exe" /silent /install'
+        Delete "$TEMP\MicrosoftEdgeWebview2Setup.exe"
+      ${Else}
+        DetailPrint "WebView2 download failed ($R0). Install manually if the app cannot start."
+      ${EndIf}
+    ${Else}
+      DetailPrint "WebView2 already installed ($0)"
+    ${EndIf}
+
     ; Write Uninstaller
     WriteUninstaller "$INSTDIR\uninstall.exe"
 

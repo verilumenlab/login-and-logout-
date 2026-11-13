@@ -139,6 +139,25 @@ BASE_HTML_WRAPPER = """<!DOCTYPE html>
       border-top: 1px dashed #cbd5e1;
       padding-top: 16px;
     }}
+    .status-table {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      margin: 8px 0 0;
+    }}
+    .status-table th {{
+      text-align: left;
+      background: #f1f5f9;
+      color: #475569;
+      padding: 8px 6px;
+      border-bottom: 1px solid #e2e8f0;
+      font-weight: 700;
+    }}
+    .status-table td {{
+      padding: 7px 6px;
+      border-bottom: 1px solid #f1f5f9;
+      color: #0f172a;
+    }}
   </style>
 </head>
 <body>
@@ -440,35 +459,42 @@ Access reports online:
         """.strip(),
     },
     "attendance_weekly_report": {
-        "subject": "Weekly Attendance Executive Digest ({week_range})",
+        "subject": "Weekly login status — {target_scope} ({week_range})",
         "badge_class": "badge-primary",
-        "badge_text": "Weekly Digest",
+        "badge_text": "Weekly Login Status",
         "html": """
           <p>Hello <strong>{recipient_name}</strong>,</p>
-          <p>Attached is the consolidated weekly attendance and computer activity digest for the period <strong>{week_range}</strong>.</p>
-          
+          <p>Here is the <strong>weekly employee login status</strong> for <strong>{week_range}</strong> (from the WorkPulse desktop agent).</p>
+
           <div class="info-card">
             <div class="info-row"><span class="info-label">Scope:</span> <span class="info-val">{target_scope}</span></div>
-            <div class="info-row"><span class="info-label">Average Daily Attendance:</span> <span class="info-val">{attendance_rate}%</span></div>
-            <div class="info-row"><span class="info-label">Total Working Hours:</span> <span class="info-val">{total_working_hours}h</span></div>
-            <div class="info-row"><span class="info-label">Total Break Duration:</span> <span class="info-val">{total_break_hours}h</span></div>
-            <div class="info-row"><span class="info-label">Resolved Leaves:</span> <span class="info-val">{resolved_leaves}</span></div>
+            <div class="info-row"><span class="info-label">Headcount:</span> <span class="info-val">{active_headcount}</span></div>
+            <div class="info-row"><span class="info-label">Employees with login:</span> <span class="info-val">{employees_logged_in}</span></div>
+            <div class="info-row"><span class="info-label">No login this week:</span> <span class="info-val">{employees_no_login}</span></div>
+            <div class="info-row"><span class="info-label">Attendance rate:</span> <span class="info-val">{attendance_rate}%</span></div>
+            <div class="info-row"><span class="info-label">Total logged hours:</span> <span class="info-val">{total_working_hours}h</span></div>
+            <div class="info-row"><span class="info-label">Leave decisions:</span> <span class="info-val">{resolved_leaves}</span></div>
           </div>
-          
+
+          <h3 style="margin:20px 0 8px;font-size:15px;">Employee login summary</h3>
+          {login_summary_html}
+
+          <p style="margin-top:16px;font-size:13px;color:#64748b;">Full Excel workbook is attached. Open the web portal for live details.</p>
+
           <div class="btn-container">
-            <a href="{dashboard_url}/reports" class="btn">Open Reports Center</a>
+            <a href="{dashboard_url}/reports" class="btn">Open HR / Manager portal</a>
           </div>
         """,
         "text": """
-Weekly Attendance Executive Digest ({week_range})
+Weekly login status — {target_scope} ({week_range})
 
-- Scope: {target_scope}
-- Attendance Rate: {attendance_rate}%
-- Working Hours: {total_working_hours}h
-- Break Hours: {total_break_hours}h
+- Headcount: {active_headcount}
+- Logged in: {employees_logged_in}
+- No login: {employees_no_login}
+- Attendance rate: {attendance_rate}%
+- Working hours: {total_working_hours}h
 
-Access online:
-{dashboard_url}/reports
+Portal: {dashboard_url}/reports
         """.strip(),
     },
     "attendance_monthly_report": {
@@ -763,13 +789,18 @@ def render_email_template(
         "temporary_password": "TempPass123!",
         "expires_minutes": 15,
         "otp_code": "N/A",
+        "login_summary_html": "",
+        "employees_logged_in": 0,
+        "employees_no_login": 0,
+        "active_headcount": 0,
         **context,
     }
 
-    # Sanitize string variables for HTML injection safety
+    # Sanitize string variables for HTML injection safety.
+    # Keys ending with _html are trusted fragments built server-side (already escaped).
     html_safe_ctx: dict[str, Any] = {}
     for k, v in safe_ctx.items():
-        if isinstance(v, str):
+        if isinstance(v, str) and not k.endswith("_html"):
             html_safe_ctx[k] = html.escape(v)
         else:
             html_safe_ctx[k] = v

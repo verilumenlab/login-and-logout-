@@ -20,8 +20,6 @@ import {
   ShieldAlert,
   Loader2,
   Trash2,
-  Eye,
-  EyeOff,
 } from 'lucide-react';
 import {
   apiClient,
@@ -76,7 +74,6 @@ export default function EmployeesPage() {
     ...EMPTY_FORM,
     hire_date: new Date().toISOString().split('T')[0],
   });
-  const [showPassword, setShowPassword] = useState(false);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
   // Import State
@@ -249,7 +246,6 @@ export default function EmployeesPage() {
           <button
             onClick={() => {
               setFormErrors({});
-              setShowPassword(false);
               setShowAddModal(true);
             }}
             className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
@@ -678,7 +674,9 @@ export default function EmployeesPage() {
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="">No Manager</option>
-                    {employees.map((emp) => (
+                    {employees
+                      .filter((emp) => emp.employee_code !== 'ADMIN-001')
+                      .map((emp) => (
                       <option key={emp.id} value={emp.id}>
                         {emp.full_name} ({emp.employee_code})
                       </option>
@@ -693,7 +691,9 @@ export default function EmployeesPage() {
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="">Select HR Rep</option>
-                    {employees.map((emp) => (
+                    {employees
+                      .filter((emp) => emp.employee_code !== 'ADMIN-001')
+                      .map((emp) => (
                       <option key={emp.id} value={emp.id}>
                         {emp.full_name} ({emp.employee_code})
                       </option>
@@ -720,23 +720,13 @@ export default function EmployeesPage() {
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Initial Account Password
                   </label>
-                  <div className="relative">
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      placeholder="Min 8 characters"
-                      value={formData.initial_password || ''}
-                      onChange={(e) => setFormData({ ...formData, initial_password: e.target.value })}
-                      className="w-full px-3 py-2 pr-10 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      aria-label={showPassword ? 'Hide password' : 'Show password'}
-                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
-                    >
-                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                  </div>
+                  <input
+                    type="password"
+                    placeholder="Min 8 characters"
+                    value={formData.initial_password || ''}
+                    onChange={(e) => setFormData({ ...formData, initial_password: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
                 </div>
               </div>
 

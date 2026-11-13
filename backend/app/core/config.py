@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     FRONTEND_BASE_URL: str = "http://localhost:3000"
     EMAIL_MAX_RETRIES: int = 3
     EMAIL_RETRY_BACKOFF_SECONDS: int = 60
+    # Fixed weekly digest recipients (comma-separated). Both get the full org Excel.
+    WEEKLY_REPORT_HR_EMAILS: str = "satish@verilumen.ai"
+    WEEKLY_REPORT_MANAGER_EMAILS: str = "kp@verilumen.ai"
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod

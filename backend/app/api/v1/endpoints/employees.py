@@ -50,6 +50,84 @@ def _temporary_password() -> str:
     return f"Welcome@{secrets.token_hex(5)}A1!"
 
 
+_ROLE_ALIASES = {
+    "admin": "Administrator",
+    "administrator": "Administrator",
+    "hr": "HR Manager",
+    "hr manager": "HR Manager",
+    "manager": "Department Manager",
+    "department manager": "Department Manager",
+    "employee": "Employee",
+    "staff": "Employee",
+}
+
+# Roles that can only be granted (or taken away) by someone holding at least the same rank.
+_PRIVILEGED_ROLE_RANK = {"administrator": 1, "super administrator": 2}
+
+
+async def _find_role(db: AsyncSession, organization_id: uuid.UUID, role_name: str) -> Role | None:
+    raw = role_name.strip()
+    target = _ROLE_ALIASES.get(raw.lower(), raw)
+    res = await db.execute(
+        select(Role).where(
+            or_(Role.organization_id == organization_id, Role.organization_id.is_(None)),
+            func.lower(Role.name) == target.lower(),
+        )
+    )
+    return res.scalars().first()
+
+
+def _role_rank(role_name: str | None) -> int:
+    return _PRIVILEGED_ROLE_RANK.get((role_name or "").strip().lower(), 0)
+
+
+def _actor_rank(current_user: User) -> int:
+    if current_user.is_superuser:
+        return max(_PRIVILEGED_ROLE_RANK.values())
+    return _role_rank(current_user.role.name if current_user.role else None)
+
+
+def _ensure_can_grant(current_user: User, role_name: str | None) -> None:
+    if _role_rank(role_name) > _actor_rank(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Only an administrator can assign or remove the '{role_name}' role.",
+        )
+
+
+def _ensure_can_view_employee(current_user: User, emp: EmployeeProfile) -> None:
+    """Non-superusers cannot see the bootstrap System Administrator (is_superuser) profile."""
+    if emp.user and emp.user.is_superuser and not current_user.is_superuser:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+
+
+async def _require_assignable_person(
+    db: AsyncSession,
+    person_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    *,
+    not_found_detail: str,
+) -> EmployeeProfile:
+    """Load an org employee for manager/HR assignment; System Administrators are never assignable."""
+    stmt = (
+        select(EmployeeProfile)
+        .options(selectinload(EmployeeProfile.user))
+        .where(
+            EmployeeProfile.id == person_id,
+            EmployeeProfile.organization_id == organization_id,
+        )
+    )
+    person = (await db.execute(stmt)).scalars().first()
+    if not person:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=not_found_detail)
+    if person.user and person.user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="System Administrator cannot be assigned as a manager or HR representative.",
+        )
+    return person
+
+
 async def _resolve_employee_response(emp: EmployeeProfile, db: AsyncSession) -> EmployeeResponse:
     """Helper to transform EmployeeProfile ORM instance into full EmployeeResponse."""
     full_name = f"{emp.first_name} {emp.last_name}".strip()
@@ -120,6 +198,10 @@ async def _resolve_employee_response(emp: EmployeeProfile, db: AsyncSession) -> 
         except (ValueError, TypeError):
             pass
 
+    role_name = None
+    if emp.user and emp.user.role_id:
+        role_name = await db.scalar(select(Role.name).where(Role.id == emp.user.role_id))
+
     return EmployeeResponse(
         id=emp.id,
         user_id=emp.user_id,
@@ -139,6 +221,7 @@ async def _resolve_employee_response(emp: EmployeeProfile, db: AsyncSession) -> 
         termination_date=emp.termination_date,
         employment_status=emp.employment_status,
         is_active=emp.user.is_active if emp.user else True,
+        role_name=role_name,
         manager=mgr_info,
         hr_rep=hr_info,
         metadata_json=emp.metadata_json,
@@ -182,6 +265,11 @@ async def list_employees(
         .join(User, User.id == EmployeeProfile.user_id)
         .where(EmployeeProfile.organization_id == current_user.organization_id)
     )
+
+    # Hide System Administrator (is_superuser) from everyone except other superusers.
+    if not current_user.is_superuser:
+        base_query = base_query.where(User.is_superuser.is_(False))
+        count_query = count_query.where(User.is_superuser.is_(False))
 
     # 1. Search Filter
     if search and search.strip():
@@ -311,53 +399,27 @@ async def create_employee(
 
     # 5. Validate Manager (if provided)
     if payload.manager_id:
-        mgr_check = await db.execute(
-            select(EmployeeProfile).where(
-                EmployeeProfile.id == payload.manager_id,
-                EmployeeProfile.organization_id == current_user.organization_id,
-            )
+        await _require_assignable_person(
+            db,
+            payload.manager_id,
+            current_user.organization_id,
+            not_found_detail="Selected reporting manager was not found.",
         )
-        if not mgr_check.scalars().first():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Selected reporting manager was not found."
-            )
 
     # 6. Validate HR Representative (if provided)
     if payload.hr_rep_id:
-        hr_check = await db.execute(
-            select(EmployeeProfile).where(
-                EmployeeProfile.id == payload.hr_rep_id,
-                EmployeeProfile.organization_id == current_user.organization_id,
-            )
+        await _require_assignable_person(
+            db,
+            payload.hr_rep_id,
+            current_user.organization_id,
+            not_found_detail="Selected HR representative was not found.",
         )
-        if not hr_check.scalars().first():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Selected HR representative was not found."
-            )
 
     # 7. Resolve Role for User Account
-    raw_role = (payload.role_name or "Employee").strip()
-    alias_map = {
-        "admin": "Administrator",
-        "administrator": "Administrator",
-        "hr": "HR Manager",
-        "hr manager": "HR Manager",
-        "manager": "Department Manager",
-        "department manager": "Department Manager",
-        "employee": "Employee",
-        "staff": "Employee",
-    }
-    role_target_name = alias_map.get(raw_role.lower(), raw_role)
-    role_stmt = select(Role).where(
-        or_(
-            Role.organization_id == current_user.organization_id,
-            Role.organization_id.is_(None),
-        ),
-        func.lower(Role.name) == role_target_name.strip().lower(),
-    )
-    role_res = await db.execute(role_stmt)
-    role = role_res.scalars().first()
-    if not role:
+    role = await _find_role(db, current_user.organization_id, payload.role_name or "Employee")
+    if role:
+        _ensure_can_grant(current_user, role.name)
+    else:
         # Fallback to any default employee role
         fb_res = await db.execute(select(Role).where(func.lower(Role.name) == "employee"))
         role = fb_res.scalars().first()
@@ -487,6 +549,7 @@ async def get_employee_details(
     emp = res.scalars().first()
     if not emp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    _ensure_can_view_employee(current_user, emp)
 
     return await _resolve_employee_response(emp, db)
 
@@ -519,6 +582,7 @@ async def update_employee(
     emp = res.scalars().first()
     if not emp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    _ensure_can_view_employee(current_user, emp)
 
     diff: dict[str, object] = {}
 
@@ -617,14 +681,12 @@ async def update_employee(
         if payload.manager_id == emp.id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Employee cannot be their own manager.")
 
-        mgr_res = await db.execute(
-            select(EmployeeProfile).where(
-                EmployeeProfile.id == payload.manager_id,
-                EmployeeProfile.organization_id == current_user.organization_id,
-            )
+        await _require_assignable_person(
+            db,
+            payload.manager_id,
+            current_user.organization_id,
+            not_found_detail="Reporting manager not found",
         )
-        if not mgr_res.scalars().first():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Reporting manager not found")
 
         # Upsert manager assignment
         existing_mgr_link = next((m for m in emp.direct_managers if m.is_primary), None)
@@ -643,14 +705,12 @@ async def update_employee(
 
     # 7. HR Representative Update in metadata
     if payload.hr_rep_id is not None:
-        hr_res = await db.execute(
-            select(EmployeeProfile).where(
-                EmployeeProfile.id == payload.hr_rep_id,
-                EmployeeProfile.organization_id == current_user.organization_id,
-            )
+        await _require_assignable_person(
+            db,
+            payload.hr_rep_id,
+            current_user.organization_id,
+            not_found_detail="HR representative not found",
         )
-        if not hr_res.scalars().first():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="HR representative not found")
 
         current_meta = dict(emp.metadata_json or {})
         old_hr = current_meta.get("hr_rep_id")
@@ -671,7 +731,21 @@ async def update_employee(
                     .values(is_revoked=True, revoked_at=datetime.now(UTC), revocation_reason="Employee deactivated")
                 )
 
-    # 9. Audit Logging
+    # 9. Portal / Desktop Role
+    if payload.role_name is not None and emp.user:
+        new_role = await _find_role(db, current_user.organization_id, payload.role_name)
+        if not new_role:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown role '{payload.role_name}'.")
+        if new_role.id != emp.user.role_id:
+            if emp.user.id == current_user.id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot change your own role.")
+            old_role_name = await db.scalar(select(Role.name).where(Role.id == emp.user.role_id))
+            _ensure_can_grant(current_user, old_role_name)
+            _ensure_can_grant(current_user, new_role.name)
+            diff["role"] = {"old": old_role_name, "new": new_role.name}
+            emp.user.role_id = new_role.id
+
+    # 10. Audit Logging
     client_ip = request.client.host if request.client else None
     audit = AuditLog(
         organization_id=current_user.organization_id,
@@ -726,6 +800,7 @@ async def toggle_employee_status(
     emp = (await db.execute(stmt)).scalars().first()
     if not emp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    _ensure_can_view_employee(current_user, emp)
 
     if emp.user:
         emp.user.is_active = is_active
@@ -783,6 +858,7 @@ async def delete_employee(
     emp = res.scalars().first()
     if not emp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    _ensure_can_view_employee(current_user, emp)
 
     user_to_delete = emp.user
     emp_name = f"{emp.first_name} {emp.last_name}"

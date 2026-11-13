@@ -15,12 +15,10 @@ services:
     dockerContext: ./backend
     dockerCommand: sh scripts/render-start.sh
     healthCheckPath: /api/v1/health
-    # Redeploy automatically when GitHub main gets a push that touches backend/
-    autoDeployTrigger: commit
+    autoDeploy: true
     buildFilter:
       paths:
         - backend/**
-        - render.yaml
     envVars:
       - key: ENVIRONMENT
         value: production
@@ -62,9 +60,6 @@ services:
         sync: false
       - key: BOOTSTRAP_ADMIN_PASSWORD
         sync: false
-      # Set to "true" for one deploy to reset the admin password, then set back to "false"
-      - key: BOOTSTRAP_RESET_PASSWORD
-        sync: false
       # Email for the Friday report and leave notifications: "console" (log only), "smtp" or "resend".
       - key: EMAIL_PROVIDER
         value: console
@@ -72,6 +67,10 @@ services:
         sync: false
       - key: DEFAULT_FROM_EMAIL
         sync: false
+      - key: WEEKLY_REPORT_HR_EMAILS
+        value: satish@verilumen.ai
+      - key: WEEKLY_REPORT_MANAGER_EMAILS
+        value: kp@verilumen.ai
 
   - type: keyvalue
     name: workpulse-redis
