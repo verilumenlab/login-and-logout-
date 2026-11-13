@@ -20,10 +20,12 @@ import {
   AlertCircle,
   Loader2,
 } from 'lucide-react';
-import { apiClient, Department, Employee, EmployeeUpdate } from '@/lib/api-client';
+import { apiClient, ASSIGNABLE_ROLES, Department, Employee, EmployeeUpdate, roleLabel } from '@/lib/api-client';
+import { useRole } from '@/components/RoleContext';
 
 export default function EmployeeDetailsPage() {
   const router = useRouter();
+  const { role: myRole, user: me } = useRole();
   const [employeeId, setEmployeeId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -68,6 +70,7 @@ export default function EmployeeDetailsPage() {
         hr_rep_id: emp.hr_rep?.id || '',
         hire_date: emp.hire_date,
         employment_status: emp.employment_status,
+        role_name: emp.role_name || 'Employee',
       });
     } catch (err: any) {
       setError(err.message || 'Failed to load employee details');
@@ -121,6 +124,13 @@ export default function EmployeeDetailsPage() {
       setActionLoading(false);
     }
   };
+
+  const isOwnProfile = !!employee && !!me && employee.user_id === me.id;
+  const roleOptions = ASSIGNABLE_ROLES.filter(
+    (r) => !r.adminOnly || myRole === 'ADMIN' || r.value === employee?.role_name
+  );
+  const canChangeRole =
+    !isOwnProfile && (myRole === 'ADMIN' || !ASSIGNABLE_ROLES.find((r) => r.value === employee?.role_name)?.adminOnly);
 
   if (loading) {
     return (
@@ -224,6 +234,9 @@ export default function EmployeeDetailsPage() {
               <span className="font-mono text-xs font-semibold bg-slate-100 text-slate-800 px-2.5 py-1 rounded-md border border-slate-200">
                 {employee.employee_code}
               </span>
+              <span className="text-xs font-semibold bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full border border-blue-200">
+                {roleLabel(employee.role_name)}
+              </span>
             </div>
             <div className="text-sm font-medium text-slate-600 flex items-center gap-2">
               <Briefcase className="w-4 h-4 text-slate-400" />
@@ -259,6 +272,29 @@ export default function EmployeeDetailsPage() {
             <Edit className="w-4 h-4 text-blue-600" />
             Edit Profile & Assignments
           </h2>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Role</label>
+            <select
+              value={editForm.role_name || 'Employee'}
+              disabled={!canChangeRole}
+              onChange={(e) => setEditForm({ ...editForm, role_name: e.target.value })}
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-500"
+            >
+              {roleOptions.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {r.label}: {r.hint}
+                </option>
+              ))}
+            </select>
+            {!canChangeRole && (
+              <p className="text-xs text-slate-400 mt-1">
+                {isOwnProfile
+                  ? 'You cannot change your own role.'
+                  : 'Only an administrator can change an administrator’s role.'}
+              </p>
+            )}
+          </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>

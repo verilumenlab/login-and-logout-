@@ -101,6 +101,7 @@ export interface Employee {
   termination_date?: string | null;
   employment_status: 'ACTIVE' | 'ON_LEAVE' | 'PROBATION' | 'TERMINATED';
   is_active: boolean;
+  role_name?: string | null;
   manager?: EmployeeManagerInfo | null;
   hr_rep?: EmployeeManagerInfo | null;
   metadata_json?: Record<string, any> | null;
@@ -130,6 +131,7 @@ export interface EmployeeCreate {
   hire_date: string;
   employment_status?: string;
   initial_password?: string;
+  role_name?: string;
 }
 
 export interface EmployeeUpdate {
@@ -146,6 +148,19 @@ export interface EmployeeUpdate {
   termination_date?: string;
   employment_status?: string;
   is_active?: boolean;
+  role_name?: string;
+}
+
+/** Roles that can be assigned from the portal. Administrator is offered to administrators only. */
+export const ASSIGNABLE_ROLES: { value: string; label: string; hint: string; adminOnly?: boolean }[] = [
+  { value: 'Employee', label: 'Employee', hint: 'Desktop app only: clock in/out and apply for leave' },
+  { value: 'Department Manager', label: 'Manager', hint: 'Web portal: team attendance and leave approvals' },
+  { value: 'HR Manager', label: 'HR', hint: 'Web portal: employees, leave policy, reports' },
+  { value: 'Administrator', label: 'Administrator', hint: 'Web portal: full control', adminOnly: true },
+];
+
+export function roleLabel(roleName?: string | null): string {
+  return ASSIGNABLE_ROLES.find((r) => r.value === roleName)?.label || roleName || 'Employee';
 }
 
 export interface EmployeeImportResult {
