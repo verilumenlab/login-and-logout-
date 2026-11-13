@@ -40,7 +40,7 @@ def _env_flag(name: str) -> bool:
 
 
 async def _maybe_reset_admin_password(db) -> int:
-    """One-shot admin password recovery when BOOTSTRAP_RESET_PASSWORD=true."""
+    """One-shot admin password (and email) recovery when BOOTSTRAP_RESET_PASSWORD=true."""
     if not _env_flag("BOOTSTRAP_RESET_PASSWORD"):
         return 0
 
@@ -56,8 +56,21 @@ async def _maybe_reset_admin_password(db) -> int:
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalars().first()
     if not user:
-        logger.error("No user found with email %s; cannot reset password.", email)
-        return 1
+        # First-run may have used a slightly different spelling; update the sole admin instead.
+        admins = (
+            await db.execute(select(User).where(User.is_superuser.is_(True)).order_by(User.created_at.asc()))
+        ).scalars().all()
+        if len(admins) == 1:
+            user = admins[0]
+            old_email = user.email
+            user.email = email
+            logger.info("Updating admin email from %s to %s.", old_email, email)
+        else:
+            logger.error(
+                "No user found with email %s, and could not uniquely identify an admin to update.",
+                email,
+            )
+            return 1
 
     user.hashed_password = get_password_hash(password)
     user.is_active = True
