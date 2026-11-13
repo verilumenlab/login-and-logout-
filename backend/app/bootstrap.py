@@ -10,6 +10,7 @@ Environment:
     BOOTSTRAP_ORG_NAME        Organization name (default "My Company")
     BOOTSTRAP_ADMIN_EMAIL     First administrator's sign-in email (required on first run)
     BOOTSTRAP_ADMIN_PASSWORD  First administrator's password, at least 12 characters (required on first run)
+    BOOTSTRAP_RESET_PASSWORD  Set to "true" to update an existing admin's password from BOOTSTRAP_ADMIN_* (then turn off)
 """
 
 from __future__ import annotations
@@ -34,6 +35,40 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s bootstrap: %(messa
 logger = logging.getLogger(__name__)
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _maybe_reset_admin_password(db) -> int:
+    """One-shot admin password recovery when BOOTSTRAP_RESET_PASSWORD=true."""
+    if not _env_flag("BOOTSTRAP_RESET_PASSWORD"):
+        return 0
+
+    email = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "").strip().lower()
+    password = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "")
+    if "@" not in email or len(password) < 12:
+        logger.error(
+            "BOOTSTRAP_RESET_PASSWORD is set, but BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD "
+            "(12+ characters) are missing or invalid."
+        )
+        return 1
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalars().first()
+    if not user:
+        logger.error("No user found with email %s; cannot reset password.", email)
+        return 1
+
+    user.hashed_password = get_password_hash(password)
+    user.is_active = True
+    await db.commit()
+    logger.info(
+        "Reset password for %s. Turn OFF BOOTSTRAP_RESET_PASSWORD in Render Environment now.",
+        email,
+    )
+    return 0
+
+
 async def bootstrap() -> int:
     async with AsyncSessionLocal() as db:
         role_map = await seed_system_roles(db)
@@ -42,7 +77,7 @@ async def bootstrap() -> int:
         org_count = await db.scalar(select(func.count(Organization.id)))
         if org_count:
             logger.info("Database already set up (%s organization(s)); roles refreshed.", org_count)
-            return 0
+            return await _maybe_reset_admin_password(db)
 
         email = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "").strip().lower()
         password = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "")

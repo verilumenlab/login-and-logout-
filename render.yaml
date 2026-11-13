@@ -62,6 +62,9 @@ services:
         sync: false
       - key: BOOTSTRAP_ADMIN_PASSWORD
         sync: false
+      # Set to "true" for one deploy to reset the admin password, then set back to "false"
+      - key: BOOTSTRAP_RESET_PASSWORD
+        sync: false
       # Email for the Friday report and leave notifications: "console" (log only), "smtp" or "resend".
       - key: EMAIL_PROVIDER
         value: console
