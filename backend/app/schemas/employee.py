@@ -54,7 +54,8 @@ class EmployeeCreate(BaseModel):
     work_schedule_id: uuid.UUID | None = None
     hire_date: date
     employment_status: EmploymentStatus = EmploymentStatus.ACTIVE
-    initial_password: str | None = Field(default="ChangeMe123!", min_length=8)
+    # Leave empty to auto-generate a password that is emailed to the new user.
+    initial_password: str | None = Field(default=None, min_length=8)
     role_name: str | None = "Employee"
 
 
@@ -102,6 +103,10 @@ class EmployeeResponse(BaseModel):
     metadata_json: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
+    # Only set on create (and password reset): shown once so HR can confirm the welcome email.
+    temporary_password: str | None = None
+    credentials_email_sent: bool | None = None
+    credentials_email_error: str | None = None
 
 
 class EmployeePagination(BaseModel):

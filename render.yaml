@@ -60,13 +60,16 @@ services:
         sync: false
       - key: BOOTSTRAP_ADMIN_PASSWORD
         sync: false
-      # Email for the Friday report and leave notifications: "console" (log only), "smtp" or "resend".
+      # Welcome emails (User ID + password) and Friday reports.
+      # Set EMAIL_PROVIDER=resend, RESEND_API_KEY, and a verified DEFAULT_FROM_EMAIL to deliver real mail.
       - key: EMAIL_PROVIDER
         value: console
       - key: RESEND_API_KEY
         sync: false
       - key: DEFAULT_FROM_EMAIL
         sync: false
+      - key: DEFAULT_FROM_NAME
+        value: WorkPulse
       - key: WEEKLY_REPORT_HR_EMAILS
         value: satish@verilumen.ai
       - key: WEEKLY_REPORT_MANAGER_EMAILS

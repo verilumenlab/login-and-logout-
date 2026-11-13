@@ -181,42 +181,43 @@ BASE_HTML_WRAPPER = """<!DOCTYPE html>
 
 TEMPLATES_CONFIG: dict[str, dict[str, Any]] = {
     "employee_account_creation": {
-        "subject": "Welcome to {org_name} - Your Account Credentials",
+        "subject": "Welcome to {org_name} — your WorkPulse login",
         "badge_class": "badge-primary",
-        "badge_text": "Account Provisioned",
+        "badge_text": "Account Created",
         "html": """
           <p>Hello <strong>{employee_name}</strong>,</p>
-          <p>Your employee profile has been created in the <strong>{org_name}</strong> Enterprise Attendance & Activity Platform.</p>
-          
+          <p>Your <strong>{org_name}</strong> WorkPulse account is ready. Use these details to sign in:</p>
+
           <div class="info-card">
-            <div class="info-row"><span class="info-label">Employee ID:</span> <span class="info-val">{employee_code}</span></div>
-            <div class="info-row"><span class="info-label">Email:</span> <span class="info-val">{email}</span></div>
+            <div class="info-row"><span class="info-label">Employee code:</span> <span class="info-val">{employee_code}</span></div>
+            <div class="info-row"><span class="info-label">User ID (email):</span> <span class="info-val">{email}</span></div>
+            <div class="info-row"><span class="info-label">Password:</span> <span class="info-val" style="font-family: monospace; color: #2563eb; font-size: 16px;">{temporary_password}</span></div>
             <div class="info-row"><span class="info-label">Department:</span> <span class="info-val">{department_name}</span></div>
-            <div class="info-row"><span class="info-label">Designation:</span> <span class="info-val">{designation}</span></div>
-            <div class="info-row"><span class="info-label">Temporary Password:</span> <span class="info-val" style="font-family: monospace; color: #2563eb;">{temporary_password}</span></div>
+            <div class="info-row"><span class="info-label">Job title:</span> <span class="info-val">{designation}</span></div>
           </div>
-          
-          <p>Please log in to the web dashboard using your temporary password and set a secure password immediately.</p>
-          
+
+          <p><strong>Employees:</strong> install the WorkPulse desktop app on your laptop and sign in with the User ID and Password above (Dashboard, Login &amp; Logout, Leave).</p>
+          <p><strong>HR / Manager / Admin:</strong> sign in on the web portal.</p>
+
           <div class="btn-container">
-            <a href="{dashboard_url}/login" class="btn">Sign In to Dashboard</a>
+            <a href="{dashboard_url}/login" class="btn">Open web portal</a>
           </div>
-          
+
           <div class="security-notice">
-            <strong>Security Reminder:</strong> Never share your credentials with anyone. IT or HR will never ask for your password.
+            <strong>Security:</strong> Change your password after first login. Never share these credentials. HR will never ask for your password by chat.
           </div>
         """,
         "text": """
 Welcome to {org_name}, {employee_name}!
 
-Your employee profile has been provisioned:
-- Employee ID: {employee_code}
-- Email: {email}
+Your WorkPulse login:
+- Employee code: {employee_code}
+- User ID (email): {email}
+- Password: {temporary_password}
 - Department: {department_name}
-- Temporary Password: {temporary_password}
 
-Sign in to configure your permanent password:
-{dashboard_url}/login
+Employees: sign in with the WorkPulse desktop app.
+HR / Manager / Admin: {dashboard_url}/login
         """.strip(),
     },
     "password_reset": {

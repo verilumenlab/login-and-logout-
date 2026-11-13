@@ -284,6 +284,7 @@ class EmailService:
         )
         # Immediate dispatch
         await cls.dispatch_outbox_message(db, outbox.id)
+        await db.refresh(outbox)
         return outbox
 
     @classmethod

@@ -99,6 +99,10 @@ export interface Employee {
   } | null;
   hire_date: string;
   termination_date?: string | null;
+  /** Only present right after create / password reset. */
+  temporary_password?: string | null;
+  credentials_email_sent?: boolean | null;
+  credentials_email_error?: string | null;
   employment_status: 'ACTIVE' | 'ON_LEAVE' | 'PROBATION' | 'TERMINATED';
   is_active: boolean;
   role_name?: string | null;

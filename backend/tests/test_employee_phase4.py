@@ -251,6 +251,9 @@ async def test_add_employee_with_full_assignments_and_audit_log(
     assert data["manager"]["id"] == str(env["mgr_profile"].id)
     assert data["hr_rep"]["id"] == str(env["hr_profile"].id)
     assert data["is_active"] is True
+    assert data["temporary_password"] == "NewEmployeeP@ss1"
+    assert data["credentials_email_sent"] is False
+    assert data["credentials_email_error"]
 
     # Verify audit log was recorded
     audit_stmt = select(AuditLog).where(

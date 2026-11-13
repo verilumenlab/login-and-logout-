@@ -429,7 +429,7 @@ async def create_employee(
             )
 
     # 8. Create User Account (Argon2id password)
-    raw_password = payload.initial_password or _temporary_password()
+    raw_password = (payload.initial_password or "").strip() or _temporary_password()
     user = User(
         organization_id=current_user.organization_id,
         email=clean_email,
@@ -492,17 +492,33 @@ async def create_employee(
         },
     )
     db.add(audit)
-    # Enqueue onboarding credentials notification
+    await db.commit()
+
+    credentials_email_sent = False
+    credentials_email_error: str | None = None
     try:
+        from app.core.config import settings as app_settings
+        from app.models.notification import OutboxStatus
         from app.services.email_service import EmailService
-        await EmailService.notify_employee_account_creation(
+
+        outbox = await EmailService.notify_employee_account_creation(
             db=db,
             employee_id=profile.id,
             temporary_password=raw_password,
         )
-    except Exception:
-        pass
-    await db.commit()
+        if outbox is None:
+            credentials_email_error = "Could not queue the welcome email (missing email address)."
+        elif outbox.status == OutboxStatus.FAILED:
+            credentials_email_error = outbox.error_message or "Welcome email delivery failed."
+        elif app_settings.EMAIL_PROVIDER.strip().lower() in ("", "console"):
+            credentials_email_error = (
+                "Mail is in test mode on the server. Copy the password below and share it with the employee, "
+                "or set EMAIL_PROVIDER=resend (with RESEND_API_KEY) on Render."
+            )
+        else:
+            credentials_email_sent = True
+    except Exception as exc:
+        credentials_email_error = str(exc) or "Welcome email could not be sent."
 
     # Reload full profile with relationships
     stmt = (
@@ -520,7 +536,11 @@ async def create_employee(
     reloaded = (await db.execute(stmt)).scalars().first()
     if not reloaded:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to reload created record")
-    return await _resolve_employee_response(reloaded, db)
+    response = await _resolve_employee_response(reloaded, db)
+    response.temporary_password = raw_password
+    response.credentials_email_sent = credentials_email_sent
+    response.credentials_email_error = credentials_email_error
+    return response
 
 
 @router.get("/{employee_id}", response_model=EmployeeResponse)

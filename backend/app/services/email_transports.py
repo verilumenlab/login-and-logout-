@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import email.message
+import logging
 import mimetypes
 import os
 import smtplib
@@ -25,6 +26,8 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class TransportSendResult:
@@ -87,6 +90,11 @@ class ConsoleEmailTransport(BaseEmailTransport):
             "attachments": attachments or [],
         }
         self.sent_history.append(record)
+        logger.info(
+            "EMAIL (console): to=%s subject=%s — not delivered; set EMAIL_PROVIDER=resend or smtp",
+            recipient_email,
+            subject,
+        )
         return TransportSendResult(success=True, provider_message_id=msg_id)
 
     def clear(self) -> None:
