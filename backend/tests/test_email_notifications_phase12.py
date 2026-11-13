@@ -650,6 +650,17 @@ async def test_notifications_outbox_api_and_templates_catalog(client: AsyncClien
     test_data = test_res.json()
     assert test_data["recipient_email"] == "tester@apex.corp"
     assert test_data["status"] == "SENT"
+    assert test_data.get("sender_email")
+
+    # 4b. Resend + delete on outbox entry
+    outbox_id = test_data["id"]
+    resend = await client.post(f"/api/v1/notifications/outbox/{outbox_id}/retry", headers=hr_headers)
+    assert resend.status_code == 200
+    assert resend.json()["id"] == outbox_id
+    deleted = await client.delete(f"/api/v1/notifications/outbox/{outbox_id}", headers=hr_headers)
+    assert deleted.status_code == 200
+    gone = await client.get(f"/api/v1/notifications/outbox/{outbox_id}", headers=hr_headers)
+    assert gone.status_code == 404
 
     # 5. Process queue manually
     queue_res = await client.post("/api/v1/notifications/process-queue?limit=10", headers=hr_headers)

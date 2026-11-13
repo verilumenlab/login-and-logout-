@@ -333,9 +333,13 @@ export interface ReportJob {
 export interface EmailOutbox {
   id: string;
   recipient_email: string;
+  recipient_name?: string | null;
+  sender_email?: string | null;
+  sender_name?: string | null;
   subject: string;
   status: 'PENDING' | 'SENT' | 'FAILED';
   retry_count: number;
+  error_message?: string | null;
   sent_at?: string | null;
   created_at: string;
 }
@@ -918,6 +922,16 @@ export class ApiClient {
   // --- Emails / Notifications ---
   async listEmailOutbox(limit: number = 50): Promise<EmailOutbox[]> {
     return this.request<EmailOutbox[]>(`/notifications/outbox?limit=${limit}`);
+  }
+
+  async resendEmailOutbox(id: string): Promise<EmailOutbox> {
+    return this.request<EmailOutbox>(`/notifications/outbox/${id}/retry`, { method: 'POST' });
+  }
+
+  async deleteEmailOutbox(id: string): Promise<{ message: string; id: string }> {
+    return this.request<{ message: string; id: string }>(`/notifications/outbox/${id}`, {
+      method: 'DELETE',
+    });
   }
 
   // --- Report Schedules (Phase 13) ---

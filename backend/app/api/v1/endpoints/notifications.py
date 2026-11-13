@@ -174,14 +174,16 @@ async def retry_failed_email(
             detail="Email outbox record not found.",
         )
 
-    # Reset retry state
+    # Reset so SENT messages can be resent as well as FAILED / PENDING.
     entry.status = OutboxStatus.PENDING
+    entry.sent_at = None
+    entry.error_message = None
     entry.scheduled_at = datetime.now(UTC)
     await db.commit()
 
     # Dispatch immediately
     await EmailService.dispatch_outbox_message(db, entry.id)
-    
+
     # Re-fetch with delivery_logs eagerly loaded
     stmt = (
         select(EmailOutbox)
@@ -190,6 +192,30 @@ async def retry_failed_email(
     )
     res = await db.execute(stmt)
     return res.scalars().first()
+
+
+@router.delete("/outbox/{outbox_id}", status_code=status.HTTP_200_OK)
+async def delete_email_outbox_entry(
+    outbox_id: uuid.UUID,
+    current_user: User = Depends(
+        require_role(["Admin", "Administrator", "Super Admin", "HR", "HR Manager"])
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """Remove an outbox row (and its delivery logs) from this organization."""
+    stmt = select(EmailOutbox).where(
+        EmailOutbox.id == outbox_id,
+        EmailOutbox.organization_id == current_user.organization_id,
+    )
+    entry = (await db.execute(stmt)).scalars().first()
+    if not entry:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Email outbox record not found.",
+        )
+    await db.delete(entry)
+    await db.commit()
+    return {"message": "Email removed from outbox.", "id": str(outbox_id)}
 
 
 @router.get("/templates", response_model=list[EmailTemplateInfo])
