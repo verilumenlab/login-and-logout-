@@ -30,7 +30,6 @@ WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH="/install/bin:$PATH" \
     PYTHONPATH="/app" \
     PORT=8000
 
@@ -41,8 +40,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy installed wheels from builder
-COPY --from=builder /install /install
+# Copy installed packages from builder into the interpreter's default prefix so they are on sys.path
+COPY --from=builder /install /usr/local
 
 # Create non-root system user
 RUN groupadd -g 10001 appgroup && \
