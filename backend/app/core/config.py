@@ -62,6 +62,9 @@ class Settings(BaseSettings):
         "http://tauri.localhost",
         "https://tauri.localhost",
     ]
+    # Optional regex for extra browser origins, e.g. Netlify deploy previews:
+    # ^https://([a-z0-9-]+--)?my-site\.netlify\.app$
+    BACKEND_CORS_ORIGIN_REGEX: str | None = None
 
     # Email & Notification Settings (Phase 12)
     EMAIL_PROVIDER: str = "console"  # "console", "smtp", "resend"

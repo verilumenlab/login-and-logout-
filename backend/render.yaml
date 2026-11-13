@@ -33,7 +33,7 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: BACKEND_CORS_ORIGINS
-        value: '["https://attendance-staging.vercel.app", "http://localhost:3000", "tauri://localhost"]'
+        value: '["https://magnificent-kangaroo-07d13a.netlify.app", "http://localhost:3000", "tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"]'
       - key: FORWARDED_ALLOW_IPS
         value: "*" # Render only exposes the service through its proxy
       - key: EMAIL_BACKEND
@@ -41,7 +41,7 @@ services:
       - key: RESEND_API_KEY
         sync: false
       - key: FRONTEND_BASE_URL
-        value: https://attendance-staging.vercel.app
+        value: https://magnificent-kangaroo-07d13a.netlify.app
 
   # 2. Celery Background Worker (Reports, Email, Offline Processing)
   - type: worker

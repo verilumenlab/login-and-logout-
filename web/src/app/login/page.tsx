@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AlertCircle, CheckCircle2, Eye, EyeOff, Laptop, Loader2, Lock, Mail, ShieldCheck } from 'lucide-react';
 import { apiClient } from '@/lib/api-client';
 import { normalizeRole, useRole, UserRole } from '@/components/RoleContext';
@@ -28,6 +28,17 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [server, setServer] = useState<'checking' | 'online' | 'offline'>('checking');
+
+  useEffect(() => {
+    let cancelled = false;
+    apiClient.isServerReachable().then((ok) => {
+      if (!cancelled) setServer(ok ? 'online' : 'offline');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const fillDemo = (account: DemoAccount) => {
     setEmail(account.email);
@@ -177,6 +188,16 @@ export default function LoginPage() {
             )}
           </button>
         </form>
+
+        <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+          <span
+            className={`w-2 h-2 rounded-full ${
+              server === 'online' ? 'bg-emerald-500' : server === 'offline' ? 'bg-rose-500' : 'bg-slate-400 animate-pulse'
+            }`}
+          />
+          {server === 'online' ? 'Server connected' : server === 'offline' ? 'Server not reachable' : 'Checking server…'}
+          <span className="font-mono text-slate-400 truncate max-w-[180px]">{apiClient.serverOrigin}</span>
+        </div>
       </div>
     </div>
   );

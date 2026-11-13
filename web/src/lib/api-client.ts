@@ -508,7 +508,46 @@ export class ApiClient {
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
-    return fetch(url, { ...options, headers });
+    const misconfigured = this.serverMisconfiguration();
+    if (misconfigured) return Promise.reject(new ApiError(misconfigured, 0));
+    return fetch(url, { ...options, headers }).catch(() => {
+      throw new ApiError(
+        `Cannot reach the server at ${this.serverOrigin}. It may be offline, or it does not allow requests from this site.`,
+        0
+      );
+    });
+  }
+
+  get serverOrigin(): string {
+    try {
+      return new URL(this.baseUrl).origin;
+    } catch {
+      return this.baseUrl;
+    }
+  }
+
+  /** A deployed site still pointing at localhost was built without NEXT_PUBLIC_API_URL. */
+  private serverMisconfiguration(): string | null {
+    if (typeof window === 'undefined') return null;
+    const local = (host: string) => host === 'localhost' || host === '127.0.0.1';
+    try {
+      if (!local(window.location.hostname) && local(new URL(this.baseUrl).hostname)) {
+        return 'This site is not connected to a server yet. Set NEXT_PUBLIC_API_URL to the backend address and redeploy.';
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  /** True when the backend answers its health check. */
+  async isServerReachable(): Promise<boolean> {
+    try {
+      const res = await this.send('/health', { method: 'GET' });
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
 
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
