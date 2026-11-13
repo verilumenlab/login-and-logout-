@@ -1,0 +1,140 @@
+name: Monorepo Continuous Integration
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-ci:
+    name: Backend CI (Python / FastAPI / PostgreSQL / Redis)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_secure_password
+          POSTGRES_DB: attendance_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements-dev.txt
+
+      - name: Lint with Ruff
+        run: |
+          ruff check backend
+          ruff format --check backend
+
+      - name: Type Check with Mypy
+        run: |
+          mypy --config-file backend/pyproject.toml backend/app
+
+      - name: Run Test Suite with Pytest
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres_secure_password@localhost:5432/attendance_db
+          SYNC_DATABASE_URL: postgresql+psycopg2://postgres:postgres_secure_password@localhost:5432/attendance_db
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: ci-test-secret-key-32-chars-long-minimum!
+        run: |
+          pytest -v --cov=app --cov-report=term-missing backend/tests
+
+  web-ci:
+    name: Web Frontend CI (Next.js / TypeScript)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: web/package.json
+
+      - name: Install Web Dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: TypeScript Type Checking
+        working-directory: web
+        run: npm run type-check
+
+      - name: Lint Next.js
+        working-directory: web
+        run: npm run lint
+
+      - name: Build Next.js Application
+        working-directory: web
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+        run: npm run build
+
+  desktop-ci:
+    name: Desktop Agent CI (Tauri 2 / React / Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: desktop/package.json
+
+      - name: Install System Dependencies for Tauri
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install Desktop Frontend Dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build Desktop Frontend
+        working-directory: desktop
+        run: npm run build
+

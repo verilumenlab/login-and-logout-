@@ -1,0 +1,4 @@
+Enterprise Attendance Agent Proprietary License
+Copyright (c) 2026 Enterprise Solutions Inc. All rights reserved.
+For internal enterprise corporate deployment only.
+
