@@ -66,6 +66,17 @@ async def readiness_probe(
 
     uptime_seconds = round(time.time() - START_TIME, 2)
 
+    provider = (settings.EMAIL_PROVIDER or "console").strip().lower()
+    email_health = {
+        "status": "healthy" if provider in ("smtp", "resend") else "degraded",
+        "provider": provider,
+        "from_email": settings.DEFAULT_FROM_EMAIL,
+        "delivers_to_inbox": provider in ("smtp", "resend"),
+        "note": None
+        if provider in ("smtp", "resend")
+        else "EMAIL_PROVIDER=console only logs mail. Outbox may show SENT but nothing reaches an inbox.",
+    }
+
     return DetailedHealthResponse(
         status=overall_status,
         environment=settings.ENVIRONMENT,
@@ -75,4 +86,5 @@ async def readiness_probe(
         database=db_health,
         redis=redis_health,
         celery=celery_health,
+        email=email_health,
     )

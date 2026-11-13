@@ -24,12 +24,27 @@ export default function EmailHistoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [mailNote, setMailNote] = useState<string | null>(null);
 
   const fetchEmails = async () => {
     setLoading(true);
     setError(null);
     try {
-      setEmails(await apiClient.listEmailOutbox(100));
+      const [data, health] = await Promise.all([
+        apiClient.listEmailOutbox(100),
+        apiClient.getDetailedHealth().catch(() => null),
+      ]);
+      setEmails(data);
+      const email = (health as { email?: { delivers_to_inbox?: boolean; note?: string; provider?: string } } | null)
+        ?.email;
+      if (email && email.delivers_to_inbox === false) {
+        setMailNote(
+          email.note ||
+            `Mail provider is "${email.provider || 'console'}". Messages can show SENT but are not delivered to inboxes.`
+        );
+      } else {
+        setMailNote(null);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load email outbox');
       setEmails([]);
@@ -111,6 +126,16 @@ export default function EmailHistoryPage() {
         </button>
       </div>
 
+      {mailNote && (
+        <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-xs">
+          <strong>Mail is not reaching inboxes.</strong> {mailNote}
+          <div className="mt-1">
+            On Render → workpulse-api → Environment, set <code className="font-mono">EMAIL_PROVIDER=smtp</code> (Google)
+            or <code className="font-mono">resend</code>, then redeploy. Resend alone only updates the outbox until that
+            is configured.
+          </div>
+        </div>
+      )}
       {error && (
         <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs">
           {error}
@@ -194,9 +219,13 @@ export default function EmailHistoryPage() {
                     </td>
                     <td className="py-3.5 px-4">
                       <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${STATUS_STYLE[item.status]}`}
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          item.error_message?.includes('Test mode')
+                            ? 'bg-amber-100 dark:bg-amber-950 text-amber-900 dark:text-amber-200'
+                            : STATUS_STYLE[item.status]
+                        }`}
                       >
-                        {item.status}
+                        {item.error_message?.includes('Test mode') ? 'LOGGED (not inbox)' : item.status}
                       </span>
                     </td>
                     <td className="py-3.5 px-4 text-slate-500">{new Date(item.created_at).toLocaleString()}</td>

@@ -168,7 +168,19 @@ class EmailService:
         if send_result.success:
             outbox.status = OutboxStatus.SENT
             outbox.sent_at = now
-            outbox.error_message = None
+            # Console/mock transport never reaches a real inbox — keep that visible in the outbox.
+            mock_delivery = bool(
+                send_result.provider_message_id and str(send_result.provider_message_id).startswith("mock-")
+            )
+            if mock_delivery:
+                outbox.error_message = (
+                    "Test mode (EMAIL_PROVIDER=console): logged only — not delivered to an inbox. "
+                    "On Render set EMAIL_PROVIDER=smtp (Google) or resend, plus SMTP_* / RESEND_API_KEY."
+                )
+                response_body = "Console mock — not delivered"
+            else:
+                outbox.error_message = None
+                response_body = "Dispatched successfully"
 
             # Log delivery receipt
             log = EmailDeliveryLog(
@@ -176,7 +188,7 @@ class EmailService:
                 event_type=DeliveryEventType.DELIVERED,
                 provider_message_id=send_result.provider_message_id,
                 response_code=200,
-                response_body="Dispatched successfully",
+                response_body=response_body,
                 timestamp=now,
             )
             db.add(log)

@@ -30,3 +30,4 @@ class DetailedHealthResponse(BaseModel):
     database: dict[str, Any]
     redis: dict[str, Any]
     celery: dict[str, Any]
+    email: dict[str, Any] | None = None

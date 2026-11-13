@@ -36,6 +36,13 @@ export interface DetailedHealthStatus extends HealthStatus {
     active_workers?: number;
     error?: string;
   };
+  email?: {
+    status: string;
+    provider?: string;
+    from_email?: string;
+    delivers_to_inbox?: boolean;
+    note?: string | null;
+  };
 }
 
 export interface Department {
