@@ -61,15 +61,29 @@ services:
       - key: BOOTSTRAP_ADMIN_PASSWORD
         sync: false
       # Welcome emails (User ID + password) and Friday reports.
-      # Set EMAIL_PROVIDER=resend, RESEND_API_KEY, and a verified DEFAULT_FROM_EMAIL to deliver real mail.
+      # Set in the Render dashboard (do not leave EMAIL_PROVIDER=console for real inbox delivery):
+      # EMAIL_PROVIDER=smtp, SMTP_HOST=smtp.gmail.com, SMTP_PORT=587, SMTP_TLS=true,
+      # SMTP_USER, SMTP_PASSWORD (Google App Password), DEFAULT_FROM_EMAIL
       - key: EMAIL_PROVIDER
-        value: console
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_TLS
+        sync: false
+      - key: SMTP_SSL
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: DEFAULT_FROM_EMAIL
         sync: false
       - key: DEFAULT_FROM_NAME
-        value: WorkPulse
+        sync: false
       - key: WEEKLY_REPORT_HR_EMAILS
         value: satish@verilumen.ai
       - key: WEEKLY_REPORT_MANAGER_EMAILS
