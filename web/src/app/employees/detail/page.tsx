@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import {
   User,
   ArrowLeft,
@@ -23,9 +23,14 @@ import {
 import { apiClient, Department, Employee, EmployeeUpdate } from '@/lib/api-client';
 
 export default function EmployeeDetailsPage() {
-  const params = useParams();
   const router = useRouter();
-  const employeeId = params.id as string;
+  const [employeeId, setEmployeeId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('id');
+    if (id) setEmployeeId(id);
+    else router.replace('/employees');
+  }, [router]);
 
   const [employee, setEmployee] = useState<Employee | null>(null);
   const [allEmployees, setAllEmployees] = useState<Employee[]>([]);
@@ -40,6 +45,7 @@ export default function EmployeeDetailsPage() {
   const [actionLoading, setActionLoading] = useState(false);
 
   const fetchEmployeeData = async () => {
+    if (!employeeId) return;
     setLoading(true);
     setError(null);
     try {
@@ -95,6 +101,7 @@ export default function EmployeeDetailsPage() {
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!employeeId) return;
     setActionLoading(true);
     setError(null);
     setSuccessMsg(null);

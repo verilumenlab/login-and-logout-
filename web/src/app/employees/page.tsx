@@ -461,7 +461,7 @@ export default function EmployeesPage() {
                           {emp.is_active ? 'Deactivate' : 'Activate'}
                         </button>
                         <Link
-                          href={`/employees/${emp.id}`}
+                          href={`/employees/detail?id=${emp.id}`}
                           className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-50 dark:hover:bg-blue-950/40 px-2.5 py-1 rounded font-medium transition"
                         >
                           View Profile

@@ -5,7 +5,7 @@ import { DetailedHealthStatus, apiClient } from '@/lib/api-client';
 
 export default function HealthPage() {
   const [backendHealth, setBackendHealth] = useState<DetailedHealthStatus | null>(null);
-  const [frontendHealth, setFrontendHealth] = useState<{ status: string; timestamp: string } | null>(null);
+  const [checkedAt, setCheckedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -13,13 +13,7 @@ export default function HealthPage() {
     setLoading(true);
     setError(null);
     try {
-      // Fetch frontend self-health
-      const feRes = await fetch('/api/health');
-      if (feRes.ok) {
-        setFrontendHealth(await feRes.json());
-      }
-
-      // Fetch backend health
+      setCheckedAt(new Date().toLocaleString());
       const beData = await apiClient.getDetailedHealth();
       setBackendHealth(beData);
     } catch (err: unknown) {
@@ -65,8 +59,8 @@ export default function HealthPage() {
           </div>
           <div className="mt-4 text-xs text-slate-500 space-y-1">
             <p>Service: enterprise-attendance-web</p>
-            <p>Route: /api/health</p>
-            <p>Checked: {frontendHealth?.timestamp || 'Just now'}</p>
+            <p>API: {process.env.NEXT_PUBLIC_API_URL}</p>
+            <p>Checked: {checkedAt || 'Just now'}</p>
           </div>
         </div>
 
