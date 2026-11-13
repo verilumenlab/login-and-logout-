@@ -16,12 +16,12 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.rate_limit import rate_limit
 from app.core.dependencies import (
     get_current_active_user,
     get_user_permissions,
     require_role,
 )
+from app.core.rate_limit import RateLimitExceeded, check_rate_limit, rate_limit
 from app.core.security import (
     create_access_token,
     generate_otp_code,
@@ -108,9 +108,29 @@ def _ensure_utc(dt: datetime | None) -> datetime | None:
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register_user(
     user_in: UserCreate,
+    current_user: User = Depends(require_role("Super Administrator", "Administrator", "Admin")),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """Create a new user account within an organization."""
+    """Create a new user account within an organization (administrators only)."""
+    if not current_user.is_superuser:
+        if user_in.organization_id != current_user.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Administrators can only create users in their own organization",
+            )
+        if user_in.is_superuser:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only a superuser can create superuser accounts",
+            )
+
+    role = (await db.execute(select(Role).where(Role.id == user_in.role_id))).scalars().first()
+    if role is None or (role.organization_id is not None and role.organization_id != user_in.organization_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid role for this organization",
+        )
+
     existing = await db.execute(
         select(User).where(User.organization_id == user_in.organization_id, User.email == user_in.email)
     )
@@ -267,6 +287,23 @@ async def login(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="This desktop application is available exclusively to Employee accounts. Please use the web application.",
             )
+    elif not user.is_superuser and (user.role.name if user.role else "").strip().lower() == "employee":
+        history = LoginHistory(
+            organization_id=user.organization_id,
+            user_id=user.id,
+            email=user.email,
+            ip_address=client_ip,
+            user_agent=user_agent,
+            is_success=False,
+            failure_reason="Web access denied: Employee accounts must use the desktop app",
+            device_identifier=payload.device_identifier,
+        )
+        db.add(history)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Employee accounts can sign in only from the WorkPulse desktop app installed on your laptop.",
+        )
 
     # 4. Device Verification & Blocking Check
     if payload.device_identifier:
@@ -827,9 +864,7 @@ async def forgot_password(
             await db.commit()
 
     return ForgotPasswordResponse(
-        message="If an account exists for this email address, password reset instructions and OTP have been generated.",
-        reset_token=raw_token if user else None,
-        otp_code=otp_code if user else None,
+        message="If an account exists for this email address, password reset instructions and OTP have been sent.",
     )
 
 
@@ -846,12 +881,36 @@ async def reset_password(
     token_hash_val = hash_token(payload.token_or_otp)
 
     stmt = select(PasswordResetToken).where(
-        (PasswordResetToken.token_hash == token_hash_val) | (PasswordResetToken.otp_code == payload.token_or_otp),
+        PasswordResetToken.token_hash == token_hash_val,
         PasswordResetToken.is_used == False,  # noqa: E712
         PasswordResetToken.expires_at > now,
     )
     result = await db.execute(stmt)
     reset_record = result.scalars().first()
+
+    # 6-digit OTPs are low-entropy: only accept them scoped to one account, with a per-account attempt cap.
+    if reset_record is None and payload.email:
+        allowed, retry_after = await check_rate_limit(
+            key=f"auth_reset_otp:{payload.email.lower()}",
+            max_requests=5,
+            window_seconds=15 * 60,
+        )
+        if not allowed:
+            raise RateLimitExceeded(
+                retry_after=retry_after,
+                detail="Too many OTP attempts for this account. Please request a new reset code later.",
+            )
+
+        user_ids = select(User.id).where(User.email == payload.email)
+        if payload.organization_id:
+            user_ids = user_ids.where(User.organization_id == payload.organization_id)
+        otp_stmt = select(PasswordResetToken).where(
+            PasswordResetToken.user_id.in_(user_ids),
+            PasswordResetToken.otp_code == payload.token_or_otp,
+            PasswordResetToken.is_used == False,  # noqa: E712
+            PasswordResetToken.expires_at > now,
+        )
+        reset_record = (await db.execute(otp_stmt)).scalars().first()
 
     if not reset_record:
         raise HTTPException(
@@ -871,6 +930,11 @@ async def reset_password(
     user.failed_login_attempts = 0
     user.locked_until = None
     reset_record.is_used = True
+    await db.execute(
+        update(PasswordResetToken)
+        .where(PasswordResetToken.user_id == user.id, PasswordResetToken.is_used == False)  # noqa: E712
+        .values(is_used=True)
+    )
 
     # Revoke all existing sessions for security
     await db.execute(

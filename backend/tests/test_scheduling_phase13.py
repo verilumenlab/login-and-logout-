@@ -177,15 +177,26 @@ def test_timezone_aware_date_ranges():
     assert e_d == date(2026, 11, 11)
     assert key_d == "2026-11-11"
 
-    # 2. WEEKLY: Should return previous week Monday to Sunday
-    # For Nov 12, 2026 (Thursday), current week is W46 (Nov 9-15).
-    # Previous week was Nov 2 to Nov 8.
+    # 2. WEEKLY: Friday digest covers the current Monday-Friday work week.
+    # Friday Nov 13, 2026 (and the weekend after it) -> W46, Nov 9-13.
+    for friday_or_weekend in (date(2026, 11, 13), date(2026, 11, 14), date(2026, 11, 15)):
+        s_w, e_w, key_w = ReportSchedulerService.get_period_date_range(
+            ReportType.WEEKLY, "UTC", target_reference_date=friday_or_weekend
+        )
+        assert (s_w, e_w, key_w) == (date(2026, 11, 9), date(2026, 11, 13), "2026-W46")
+
+    # Before Friday (Thursday Nov 12) the last completed work week is used: W45, Nov 2-6.
     s_w, e_w, key_w = ReportSchedulerService.get_period_date_range(
         ReportType.WEEKLY, "UTC", target_reference_date=ref
     )
-    assert s_w == date(2026, 11, 2)
-    assert e_w == date(2026, 11, 8)
-    assert "W45" in key_w
+    assert (s_w, e_w, key_w) == (date(2026, 11, 2), date(2026, 11, 6), "2026-W45")
+
+    # Missed-run recovery only treats this week as due after Friday 19:30 local time.
+    ist_cron = "30 19 * * 5"
+    before_send = datetime(2026, 11, 13, 13, 0, tzinfo=UTC)  # Fri 18:30 IST
+    after_send = datetime(2026, 11, 13, 14, 30, tzinfo=UTC)  # Fri 20:00 IST
+    assert ReportSchedulerService.weekly_catchup_reference_date(ist_cron, "Asia/Kolkata", before_send) == date(2026, 11, 12)
+    assert ReportSchedulerService.weekly_catchup_reference_date(ist_cron, "Asia/Kolkata", after_send) == date(2026, 11, 13)
 
     # 3. MONTHLY: Should return 1st to last day of previous month
     # For November 2026, previous month was October (31 days)
@@ -271,6 +282,79 @@ async def test_weekly_and_monthly_report_generation(setup_scheduler_env, db_sess
     )
     assert m_succ is True
     assert m_job.status == ReportStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_friday_weekly_excel_contents_and_recipients(setup_scheduler_env, db_session: AsyncSession):
+    """Friday digest: this week's Mon-Fri, real Wi-Fi/login data, org workbook to HR+Admin, team-only workbook to manager."""
+    import openpyxl
+
+    from app.models.presence import PresenceEvent
+
+    env = setup_scheduler_env
+    org = env["org"]
+    admin_user, admin_emp, _ = env["admin"]
+    hr_user, _, _ = env["hr"]
+    mgr_user, mgr_emp, _ = env["mgr"]
+    _, sub_emp, _ = env["sub"]
+
+    db_session.add(
+        PresenceEvent(
+            organization_id=org.id,
+            employee_id=sub_emp.id,
+            event_type="WIFI_CONNECTED",
+            occurred_at=datetime(2026, 11, 11, 8, 58, tzinfo=UTC),
+            client_event_id=f"wlan:test:{uuid.uuid4().hex}",
+            ssid="Office-5G",
+            attendance_action="CLOCK_IN",
+        )
+    )
+    await db_session.commit()
+
+    succ, msg, job = await ReportSchedulerService.execute_scheduled_reporting(
+        db=db_session,
+        organization_id=org.id,
+        schedule_type=ReportType.WEEKLY,
+        target_reference_date=date(2026, 11, 13),
+        force=True,
+    )
+    assert succ is True, msg
+    assert job.parameters_json["start_date"] == "2026-11-09"
+    assert job.parameters_json["end_date"] == "2026-11-13"
+
+    files = (await db_session.execute(select(ReportFile).where(ReportFile.report_job_id == job.id))).scalars().all()
+    org_file = next(f for f in files if f.employee_id is None)
+    mgr_files = [f for f in files if f.employee_id == mgr_emp.id and f.file_name.startswith("weekly_consolidated_team")]
+    assert len(mgr_files) == 1
+
+    def sheet_text(path: str, sheet: str) -> str:
+        wb = openpyxl.load_workbook(path)
+        return " ".join(str(c.value) for row in wb[sheet].iter_rows() for c in row if c.value is not None)
+
+    wifi_sheet = sheet_text(org_file.storage_path, "Wi-Fi Verification")
+    assert "Office-5G" in wifi_sheet and "Wi-Fi connected" in wifi_sheet
+    assert "Corp_Office_5G" not in wifi_sheet
+    login_sheet = sheet_text(org_file.storage_path, "Login & Logout Details")
+    assert sub_emp.employee_code in login_sheet and "08:58" in login_sheet
+
+    team_summary = sheet_text(mgr_files[0].storage_path, "Attendance Summary")
+    assert sub_emp.employee_code in team_summary
+    assert admin_emp.employee_code not in team_summary
+    assert mgr_emp.employee_code not in team_summary
+
+    outbox = (
+        await db_session.execute(
+            select(EmailOutbox).where(
+                EmailOutbox.organization_id == org.id,
+                EmailOutbox.idempotency_key.like("att_rpt_weekly_%"),
+            )
+        )
+    ).scalars().all()
+    by_recipient = {o.recipient_email: o for o in outbox}
+    assert {admin_user.email, hr_user.email, mgr_user.email} <= set(by_recipient)
+    assert org_file.file_name in (by_recipient[admin_user.email].attachments or "")
+    assert org_file.file_name in (by_recipient[hr_user.email].attachments or "")
+    assert mgr_files[0].file_name in (by_recipient[mgr_user.email].attachments or "")
 
 
 @pytest.mark.asyncio

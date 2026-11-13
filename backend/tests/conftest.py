@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.database import Base, get_db
+from app.core.redis import close_redis_client
 from app.main import app
 
 # Test in-memory database URL
@@ -35,6 +36,14 @@ async def init_test_db():
     yield
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+
+
+@pytest_asyncio.fixture(autouse=True, loop_scope="function")
+async def isolate_redis_client() -> AsyncGenerator[None, None]:
+    # The Redis client is a module-level singleton bound to the event loop that created it;
+    # close it inside each test's loop so the next test doesn't inherit a client on a closed loop.
+    yield
+    await close_redis_client()
 
 
 @pytest_asyncio.fixture

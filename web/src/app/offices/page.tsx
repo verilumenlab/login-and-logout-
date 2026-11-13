@@ -57,70 +57,7 @@ export default function OfficesPage() {
     }
   };
 
-  // Sample offices fallback if empty in current session
-  const displayOffices = offices.length > 0 ? offices : [
-    {
-      id: 'off-01',
-      organization_id: 'org-01',
-      name: 'Global HQ - Financial District',
-      code: 'HQ-SF',
-      address: '100 Pine Street, San Francisco, CA 94111',
-      timezone: 'America/Los_Angeles',
-      is_active: true,
-      geofences: [
-        {
-          id: 'geo-01',
-          name: 'HQ Campus Perimeter',
-          latitude: 37.7915,
-          longitude: -122.4000,
-          radius_meters: 100,
-          is_active: true,
-        },
-      ],
-      networks: [
-        {
-          id: 'net-01',
-          name: 'Corporate Secure Wi-Fi',
-          ssid: 'HQ-Corporate-WiFi',
-          bssid: '00:14:22:01:23:45',
-          public_ip: '198.51.100.1',
-          is_active: true,
-        },
-      ],
-      created_at: '2026-01-01T00:00:00Z',
-      updated_at: '2026-01-01T00:00:00Z',
-    },
-    {
-      id: 'off-02',
-      organization_id: 'org-01',
-      name: 'East Coast Engineering Center',
-      code: 'ENG-NYC',
-      address: '350 5th Ave, New York, NY 10118',
-      timezone: 'America/New_York',
-      is_active: true,
-      geofences: [
-        {
-          id: 'geo-02',
-          name: 'NYC Tower Perimeter',
-          latitude: 40.7484,
-          longitude: -73.9857,
-          radius_meters: 150,
-          is_active: true,
-        },
-      ],
-      networks: [
-        {
-          id: 'net-02',
-          name: 'NYC-Office-Secure',
-          ssid: 'NYC-Corp-WiFi',
-          public_ip: '203.0.113.50',
-          is_active: true,
-        },
-      ],
-      created_at: '2026-02-01T00:00:00Z',
-      updated_at: '2026-02-01T00:00:00Z',
-    },
-  ];
+  const displayOffices = offices;
 
   return (
     <div className="space-y-6">
@@ -156,6 +93,11 @@ export default function OfficesPage() {
 
       {/* Office Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {!loading && displayOffices.length === 0 && (
+          <p className="md:col-span-2 py-10 text-center text-xs text-slate-400">
+            No offices yet. Add an office and its Wi-Fi networks so laptop connections count as login/logout.
+          </p>
+        )}
         {displayOffices.map((office) => (
           <div
             key={office.id}

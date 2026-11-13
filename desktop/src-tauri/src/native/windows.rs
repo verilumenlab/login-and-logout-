@@ -3,7 +3,19 @@
 //! Provides transparent active window inspection, idle input detection,
 //! Registry-based auto-start management with explicit consent, and power telemetry.
 
+use std::os::windows::process::CommandExt;
 use std::process::Command;
+
+use super::{normalize_since, parse_netsh_interfaces, parse_wlan_event_line, WifiEvent};
+
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// A child process that does not flash a console window over the GUI app.
+fn hidden_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
 
 /// Retrieves the active foreground window title, process name, and PID
 pub fn get_active_window_info() -> (String, String, u32) {
@@ -27,7 +39,7 @@ pub fn get_active_window_info() -> (String, String, u32) {
         Write-Output "$($proc.ProcessName)|$($sb.ToString())|$pid"
     "#;
 
-    let output = Command::new("powershell")
+    let output = hidden_command("powershell")
         .args(["-NoProfile", "-Command", script])
         .output();
 
@@ -71,7 +83,7 @@ pub fn get_system_idle_seconds() -> u64 {
         }
     "#;
 
-    let output = Command::new("powershell")
+    let output = hidden_command("powershell")
         .args(["-NoProfile", "-Command", script])
         .output();
 
@@ -92,7 +104,7 @@ pub fn is_autostart_configured() -> bool {
         if ($val) { "true" } else { "false" }
     "#;
 
-    let output = Command::new("powershell")
+    let output = hidden_command("powershell")
         .args(["-NoProfile", "-Command", script])
         .output();
 
@@ -120,7 +132,7 @@ pub fn set_autostart(enabled: bool) -> Result<bool, String> {
         r#"Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "EnterpriseAttendanceAgent" -ErrorAction SilentlyContinue"#.to_string()
     };
 
-    let status = Command::new("powershell")
+    let status = hidden_command("powershell")
         .args(["-NoProfile", "-Command", &script])
         .status()
         .map_err(|e| format!("Failed to update Windows Registry: {e}"))?;
@@ -138,7 +150,7 @@ pub fn get_hardware_info() -> (String, Option<u8>, bool) {
         Write-Output "$guid|$battery|$charging"
     "#;
 
-    let output = Command::new("powershell")
+    let output = hidden_command("powershell")
         .args(["-NoProfile", "-Command", script])
         .output();
 
@@ -183,7 +195,7 @@ pub fn is_workstation_locked() -> bool {
         }
     "#;
 
-    let output = Command::new("powershell")
+    let output = hidden_command("powershell")
         .args(["-NoProfile", "-Command", script])
         .output();
 
@@ -233,7 +245,7 @@ pub fn query_recent_os_session_events(max_events: usize) -> Vec<(String, String,
         "#
     );
 
-    let output = Command::new("powershell")
+    let output = hidden_command("powershell")
         .args(["-NoProfile", "-Command", &script])
         .output();
 
@@ -253,36 +265,39 @@ pub fn query_recent_os_session_events(max_events: usize) -> Vec<(String, String,
 
 /// Queries connected Wi-Fi interface for SSID and BSSID via `netsh wlan show interfaces`
 pub fn get_connected_wifi_info() -> (String, String, bool) {
-    let output = Command::new("netsh")
-        .args(["wlan", "show", "interfaces"])
-        .output();
-
-    if let Ok(out) = output {
-        let text = String::from_utf8_lossy(&out.stdout);
-        let mut ssid = String::new();
-        let mut bssid = String::new();
-        let mut connected = false;
-
-        for line in text.lines() {
-            let line = line.trim();
-            if line.starts_with("State") && line.contains("connected") {
-                connected = true;
-            } else if line.starts_with("SSID") && !line.starts_with("BSSID") {
-                if let Some(val) = line.split(':').nth(1) {
-                    ssid = val.trim().to_string();
-                }
-            } else if line.starts_with("BSSID") {
-                if let Some(val) = line.split_once(':') {
-                    bssid = val.1.trim().to_string();
-                }
-            }
-        }
-
-        if connected || !ssid.is_empty() {
-            return (ssid, bssid, true);
-        }
+    match hidden_command("netsh").args(["wlan", "show", "interfaces"]).output() {
+        Ok(out) => parse_netsh_interfaces(&String::from_utf8_lossy(&out.stdout)),
+        Err(_) => (String::new(), String::new(), false),
     }
+}
 
-    ("Ethernet / Wired Office LAN".to_string(), "00:00:00:00:00:00".to_string(), false)
+/// Reads laptop Wi-Fi connect (8001) / disconnect (8003) events from the
+/// `Microsoft-Windows-WLAN-AutoConfig/Operational` log since the given time (default: last 3 days).
+/// This log is readable without administrator rights and keeps working while the app is closed,
+/// so connections made before the app started are still recorded.
+pub fn get_wifi_events(since: Option<&str>) -> Vec<WifiEvent> {
+    let since = normalize_since(since, 3);
+    let script = format!(
+        r#"
+        $start = [datetime]::Parse('{since}')
+        Get-WinEvent -FilterHashtable @{{LogName='Microsoft-Windows-WLAN-AutoConfig/Operational'; Id=8001,8003; StartTime=$start}} -ErrorAction SilentlyContinue |
+            Sort-Object RecordId | Select-Object -Last 500 | ForEach-Object {{
+                $data = @{{}}
+                foreach ($d in ([xml]$_.ToXml()).Event.EventData.Data) {{ $data[$d.Name] = $d.'#text' }}
+                "$($_.Id)|$($_.TimeCreated.ToUniversalTime().ToString('o'))|$($data['SSID'])|$($data['ProfileName'])|$($_.RecordId)"
+            }}
+        "#
+    );
+
+    let Ok(out) = hidden_command("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(parse_wlan_event_line)
+        .collect()
 }
 

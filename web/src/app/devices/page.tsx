@@ -52,51 +52,7 @@ export default function DeviceManagementPage() {
     }
   };
 
-  // Sample devices fallback if empty in current session
-  const displayDevices = devices.length > 0 ? devices : [
-    {
-      id: 'dev-01',
-      device_identifier: 'DEV-WIN11-PRO-01',
-      device_name: 'Edward-Dell-Latitude',
-      os_name: 'Windows 11 Enterprise',
-      os_version: '10.0.22631',
-      platform: 'windows',
-      mac_address: '00:1A:2B:3C:4D:5E',
-      agent_version: '0.1.0-tauri2',
-      is_trusted: true,
-      is_blocked: false,
-      registered_at: '2026-02-10T08:00:00Z',
-      last_seen_at: '2026-11-12T10:14:00Z',
-    },
-    {
-      id: 'dev-02',
-      device_identifier: 'DEV-MAC-MBP-02',
-      device_name: 'Sarah-MacBook-Pro',
-      os_name: 'macOS Sonoma',
-      os_version: '14.5.0',
-      platform: 'macos',
-      mac_address: 'AC:DE:48:00:11:22',
-      agent_version: '0.1.0-tauri2',
-      is_trusted: true,
-      is_blocked: false,
-      registered_at: '2026-03-15T09:30:00Z',
-      last_seen_at: '2026-11-12T09:45:00Z',
-    },
-    {
-      id: 'dev-03',
-      device_identifier: 'DEV-UNKNOWN-99',
-      device_name: 'Unrecognized-Workstation',
-      os_name: 'Linux Ubuntu',
-      os_version: '22.04',
-      platform: 'linux',
-      mac_address: '52:54:00:12:34:56',
-      agent_version: '0.0.1',
-      is_trusted: false,
-      is_blocked: true,
-      registered_at: '2026-11-01T12:00:00Z',
-      last_seen_at: '2026-11-02T14:20:00Z',
-    },
-  ];
+  const displayDevices = devices;
 
   const filtered = displayDevices.filter((d) => {
     return (
@@ -145,6 +101,13 @@ export default function DeviceManagementPage() {
 
       {/* Devices Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {!loading && filtered.length === 0 && (
+          <p className="md:col-span-3 py-10 text-center text-xs text-slate-400">
+            {devices.length === 0
+              ? 'No devices yet. A laptop appears here after an employee signs in to the desktop app.'
+              : 'No device matches this search.'}
+          </p>
+        )}
         {filtered.map((dev) => (
           <div
             key={dev.id}

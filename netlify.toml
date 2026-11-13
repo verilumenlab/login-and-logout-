@@ -1,0 +1,12 @@
+# Web portal (HR / Admin / Manager). The FastAPI backend is deployed separately (see backend/render.yaml).
+[build]
+  base = "web"
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+  NEXT_TELEMETRY_DISABLED = "1"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

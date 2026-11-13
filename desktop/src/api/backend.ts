@@ -1,410 +1,243 @@
 /**
- * Backend API Client with Offline Resilience & Optimistic Updates
+ * Backend API client for the employee desktop app.
  */
 
 import {
-  UserSession,
+  DeviceInfo,
+  LeaveApplyPayload,
   LeaveBalance,
   LeaveRequest,
-  ActivityTelemetry,
-  AttendanceEvent,
-  DeviceInfo,
+  LeaveType,
+  PresenceEventIn,
+  PresenceHistory,
+  PresenceMonthSummary,
+  PresenceSyncResponse,
+  UserSession,
 } from '../types';
-import {
-  getSecureToken,
-  saveSecureToken,
-  deleteSecureToken,
-  enqueueOfflineItem,
-} from './ipc';
+import { deleteSecureToken, getSecureToken, saveSecureToken } from './ipc';
 
-let customServerUrl = localStorage.getItem('__backend_server_url') || 'http://localhost:8000/api/v1';
+const DEFAULT_SERVER_URL =
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) || 'http://localhost:8000/api/v1';
+const SESSION_KEY = '__user_session';
+
+let serverUrl = localStorage.getItem('__backend_server_url') || DEFAULT_SERVER_URL;
+
+/** The server could not be reached (offline, DNS, timeout). Safe to retry later. */
+export class NetworkError extends Error {}
+/** Tokens are no longer valid; the employee must sign in again. */
+export class SessionExpiredError extends Error {}
+/** The server answered with an error status. */
+export class HttpError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+  }
+}
 
 export function setBackendServerUrl(url: string): void {
-  customServerUrl = url.replace(/\/$/, '');
-  localStorage.setItem('__backend_server_url', customServerUrl);
+  serverUrl = url.trim().replace(/\/$/, '');
+  localStorage.setItem('__backend_server_url', serverUrl);
 }
 
 export function getBackendServerUrl(): string {
-  return customServerUrl;
+  return serverUrl;
 }
 
-export async function pingBackend(): Promise<{ online: boolean; latencyMs: number }> {
-  const start = performance.now();
+function url(endpoint: string): string {
+  return `${serverUrl}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+}
+
+async function readError(res: Response): Promise<string> {
+  const text = await res.text();
   try {
-    const res = await fetch(`${customServerUrl}/health`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(3000),
-    });
-    const latencyMs = Math.round(performance.now() - start);
-    return { online: res.ok, latencyMs };
+    const parsed = JSON.parse(text);
+    if (typeof parsed.detail === 'string') return parsed.detail;
+    if (Array.isArray(parsed.detail)) {
+      return parsed.detail.map((d: { msg?: string }) => d.msg).filter(Boolean).join('; ');
+    }
   } catch {
-    return { online: false, latencyMs: -1 };
+    // not JSON
   }
+  return text || `HTTP ${res.status}`;
 }
 
-async function request<T>(
-  endpoint: string,
-  options: RequestInit = {},
-  fallbackHandler?: () => T
-): Promise<T> {
-  let token = await getSecureToken('access_token');
+async function send(endpoint: string, options: RequestInit, token: string | null): Promise<Response> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    'X-Client-Type': 'desktop',
     ...(options.headers as Record<string, string>),
   };
-
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   try {
-    let res = await fetch(`${customServerUrl}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`, {
-      ...options,
-      headers,
-      signal: AbortSignal.timeout(6000),
-    });
-
-    // Automatic token refresh on 401
-    if (res.status === 401) {
-      const refreshToken = await getSecureToken('refresh_token');
-      if (refreshToken) {
-        try {
-          const refreshRes = await fetch(`${customServerUrl}/auth/refresh`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ refresh_token: refreshToken }),
-          });
-          if (refreshRes.ok) {
-            const tokenData = await refreshRes.json();
-            await saveSecureToken('access_token', tokenData.access_token);
-            if (tokenData.refresh_token) {
-              await saveSecureToken('refresh_token', tokenData.refresh_token);
-            }
-            token = tokenData.access_token;
-            headers['Authorization'] = `Bearer ${token}`;
-            res = await fetch(`${customServerUrl}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`, {
-              ...options,
-              headers,
-              signal: AbortSignal.timeout(6000),
-            });
-          }
-        } catch {
-          // Token refresh failed, continue to error handler
-        }
-      }
-    }
-
-    if (!res.ok) {
-      const errText = await res.text();
-      let detail = errText;
-      try {
-        const parsed = JSON.parse(errText);
-        detail = parsed.detail || errText;
-      } catch {
-        // use raw
-      }
-      throw new Error(detail || `HTTP ${res.status}`);
-    }
-
-    return (await res.json()) as T;
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (fallbackHandler) {
-      console.warn(`[Backend] Call to ${endpoint} failed (${msg}). Applying offline handler.`);
-      return fallbackHandler();
-    }
-    throw new Error(msg);
+    return await fetch(url(endpoint), { ...options, headers, signal: AbortSignal.timeout(15000) });
+  } catch (err) {
+    throw new NetworkError(err instanceof Error ? err.message : String(err));
   }
 }
 
-/**
- * Dedicated Employee-Only Desktop Authentication (Prompt 18)
- */
-export async function loginUser(
-  email: string,
-  password: string,
-  deviceId?: string,
-  deviceInfo?: Partial<DeviceInfo>
-): Promise<UserSession> {
-  const hardwareId = deviceId || localStorage.getItem('__dev_id') || 'DEV-WORKSTATION-01';
+async function refreshAccessToken(): Promise<string | null> {
+  const refreshToken = await getSecureToken('refresh_token');
+  if (!refreshToken) return null;
+  const res = await send('/auth/refresh', { method: 'POST', body: JSON.stringify({ refresh_token: refreshToken }) }, null);
+  if (!res.ok) return null;
+  const data = await res.json();
+  await saveSecureToken('access_token', data.access_token);
+  if (data.refresh_token) await saveSecureToken('refresh_token', data.refresh_token);
+  return data.access_token as string;
+}
 
-  const payload = {
-    email: email.trim(),
-    password,
-    device_identifier: hardwareId,
-    device_name: deviceInfo?.machine_name || 'Employee Workstation',
-    platform: deviceInfo?.os_type || 'windows',
-    os_name: deviceInfo?.os_type === 'macos' ? 'macOS' : 'Windows',
-    os_version: deviceInfo?.os_version || '11',
-    mac_address: deviceInfo?.mac_address || null,
-    agent_version: deviceInfo?.agent_version || '0.1.0',
-    client_type: 'desktop',
-  };
-
-  const res = await fetch(`${customServerUrl}/auth/desktop-login`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Client-Type': 'desktop',
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!res.ok) {
-    const errorText = await res.text();
-    let detail = 'Authentication failed';
-    try {
-      const parsed = JSON.parse(errorText);
-      detail = parsed.detail || detail;
-    } catch {
-      // raw
-    }
-    throw new Error(detail);
+async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  let res = await send(endpoint, options, await getSecureToken('access_token'));
+  if (res.status === 401) {
+    const newToken = await refreshAccessToken();
+    if (!newToken) throw new SessionExpiredError('Your session has expired. Please sign in again.');
+    res = await send(endpoint, options, newToken);
+    if (res.status === 401) throw new SessionExpiredError('Your session has expired. Please sign in again.');
   }
+  if (!res.ok) throw new HttpError(await readError(res), res.status);
+  return (await res.json()) as T;
+}
+
+export async function pingBackend(): Promise<boolean> {
+  try {
+    const res = await fetch(url('/health'), { signal: AbortSignal.timeout(4000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Authentication (employee accounts only)
+// ---------------------------------------------------------------------------
+
+interface EmployeeProfileInfo {
+  employee_id: string;
+  employee_code: string;
+  first_name: string;
+  last_name: string;
+  job_title: string | null;
+  department_name: string | null;
+}
+
+export async function loginUser(email: string, password: string, device: DeviceInfo): Promise<UserSession> {
+  const res = await send(
+    '/auth/desktop-login',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        email: email.trim(),
+        password,
+        device_identifier: device.device_id,
+        device_name: device.machine_name || 'Employee Laptop',
+        platform: device.os_type,
+        os_name: device.os_type === 'macos' ? 'macOS' : device.os_type === 'windows' ? 'Windows' : 'Linux',
+        os_version: device.os_version || undefined,
+        mac_address: device.mac_address || undefined,
+        agent_version: device.agent_version,
+      }),
+    },
+    null
+  );
+  if (!res.ok) throw new Error(await readError(res));
 
   const data = await res.json();
-  const { access_token, refresh_token, user, device_id, device_session_id, employee_id } = data;
-
-  // Enforce role check on client as well (Prompt 18: Never rely on frontend role checks alone, enforce both)
-  const roleName = (user?.role || '').toUpperCase();
-  if (roleName !== 'EMPLOYEE' && roleName !== 'EMPLOYEE ROLE') {
-    throw new Error('This desktop application is available exclusively to Employee accounts. Please use the web application.');
+  if (String(data.user?.role || '').toUpperCase() !== 'EMPLOYEE') {
+    throw new Error('This app is only for Employee accounts. Admin, HR and Manager accounts use the web portal.');
   }
 
-  // Persist tokens securely into OS Credential Manager
-  await saveSecureToken('access_token', access_token);
-  await saveSecureToken('refresh_token', refresh_token);
-  if (device_session_id) {
-    await saveSecureToken('device_session_id', device_session_id);
+  await saveSecureToken('access_token', data.access_token);
+  await saveSecureToken('refresh_token', data.refresh_token);
+  localStorage.setItem('__device_id', data.device_id || '');
+  localStorage.setItem('__employee_id', data.employee_id || '');
+
+  let profile: EmployeeProfileInfo | null = null;
+  try {
+    profile = await request<EmployeeProfileInfo>('/presence/me');
+  } catch {
+    // Name is cosmetic; continue with the email.
   }
 
-  const userSession: UserSession = {
-    user_id: user.id || 'usr_enterprise_01',
-    email: user.email || email.trim(),
-    first_name: user.first_name || email.split('@')[0].split('.')[0] || 'Employee',
-    last_name: user.last_name || email.split('@')[0].split('.')[1] || 'User',
+  const session: UserSession = {
+    user_id: data.user.id,
+    email: data.user.email,
+    first_name: profile?.first_name || data.user.email.split('@')[0],
+    last_name: profile?.last_name || '',
     role: 'EMPLOYEE',
-    organization_id: user.organization_id || 'org_default',
-    employee_code: user.employee_code || 'EMP-001',
-    job_title: user.job_title || 'Workstation Specialist',
-    department_name: user.department_name || 'Engineering',
+    organization_id: data.user.organization_id,
+    employee_id: data.employee_id,
+    employee_code: profile?.employee_code,
+    job_title: profile?.job_title || undefined,
+    department_name: profile?.department_name || undefined,
   };
-
-  localStorage.setItem('__user_session', JSON.stringify(userSession));
-  localStorage.setItem('__device_id', device_id || '');
-  localStorage.setItem('__device_session_id', device_session_id || '');
-  localStorage.setItem('__employee_id', employee_id || '');
-
-  return userSession;
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  return session;
 }
 
 export async function logoutUser(): Promise<void> {
+  const refreshToken = await getSecureToken('refresh_token');
   try {
-    await request('/auth/logout', { method: 'POST' });
+    await request('/auth/logout', {
+      method: 'POST',
+      body: JSON.stringify(refreshToken ? { refresh_token: refreshToken } : {}),
+    });
   } catch {
-    // Ignore network failures on logout
+    // Signing out locally must work offline too.
   }
+  await clearLocalSession();
+}
+
+export async function clearLocalSession(): Promise<void> {
   await deleteSecureToken('access_token');
   await deleteSecureToken('refresh_token');
-  localStorage.removeItem('__user_session');
+  localStorage.removeItem(SESSION_KEY);
 }
 
 export function getStoredUserSession(): UserSession | null {
   try {
-    const raw = localStorage.getItem('__user_session');
-    return raw ? JSON.parse(raw) : null;
+    const raw = localStorage.getItem(SESSION_KEY);
+    return raw ? (JSON.parse(raw) as UserSession) : null;
   } catch {
     return null;
   }
 }
 
-/**
- * Attendance Operations with Offline Queueing
- */
-export async function submitAttendanceEvent(
-  eventType: 'CLOCK_IN' | 'CLOCK_OUT' | 'BREAK_START' | 'BREAK_END',
-  note?: string,
-  locationData?: {
-    latitude?: number;
-    longitude?: number;
-    accuracy_meters?: number;
-    permission_status?: string;
-    ssid?: string;
-    bssid?: string;
-  }
-): Promise<AttendanceEvent> {
-  const event: AttendanceEvent = {
-    id: `att_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-    timestamp: new Date().toISOString(),
-    event_type: eventType,
-    note,
-    synced: false,
-  };
+// ---------------------------------------------------------------------------
+// Presence: login & logout via app + Wi-Fi
+// ---------------------------------------------------------------------------
 
-  const endpoint =
-    eventType === 'CLOCK_IN'
-      ? '/attendance/clock-in'
-      : eventType === 'CLOCK_OUT'
-      ? '/attendance/clock-out'
-      : eventType === 'BREAK_START'
-      ? '/attendance/break/start'
-      : '/attendance/break/end';
-
-  const sessionToken = localStorage.getItem('__device_session_id');
-
-  try {
-    await request(endpoint, {
-      method: 'POST',
-      body: JSON.stringify({
-        notes: note,
-        client_event_id: event.id,
-        occurred_at: event.timestamp,
-        source: 'DESKTOP',
-        device_session_id: sessionToken || undefined,
-        ...(locationData || {}),
-      }),
-    });
-    event.synced = true;
-  } catch {
-    // Queue offline for later synchronization
-    enqueueOfflineItem('ATTENDANCE', { ...event, locationData } as unknown as Record<string, unknown>);
-  }
-
-  return event;
+export function syncPresenceEvents(events: PresenceEventIn[]): Promise<PresenceSyncResponse> {
+  return request<PresenceSyncResponse>('/presence/events', { method: 'POST', body: JSON.stringify({ events }) });
 }
 
-/**
- * Computer Activity Sync with Offline Queueing
- */
-export async function syncActivityLogs(logs: ActivityTelemetry[]): Promise<{ count: number; synced: boolean }> {
-  try {
-    await request('/activity/sync', {
-      method: 'POST',
-      body: JSON.stringify({ logs }),
-    });
-    return { count: logs.length, synced: true };
-  } catch {
-    for (const log of logs) {
-      enqueueOfflineItem('ACTIVITY', log as unknown as Record<string, unknown>);
-    }
-    return { count: logs.length, synced: false };
-  }
+export function getPresenceSummary(month?: string): Promise<PresenceMonthSummary> {
+  return request<PresenceMonthSummary>(`/presence/my-summary${month ? `?month=${month}` : ''}`);
 }
 
-/**
- * Leave Management
- */
-export async function getLeaveBalances(): Promise<LeaveBalance[]> {
-  return request<LeaveBalance[]>(
-    '/leaves/balances',
-    { method: 'GET' },
-    () => [
-      { leave_type: 'Annual Leave', total_allowed: 18, used: 6, available: 12 },
-      { leave_type: 'Sick Leave', total_allowed: 12, used: 3, available: 9 },
-      { leave_type: 'Casual Leave', total_allowed: 8, used: 2, available: 6 },
-      { leave_type: 'Compensatory Off', total_allowed: 3, used: 0, available: 3 },
-    ]
-  );
+export function getPresenceHistory(startDate: string, endDate: string): Promise<PresenceHistory> {
+  const qs = new URLSearchParams({ start_date: startDate, end_date: endDate });
+  return request<PresenceHistory>(`/presence/my-history?${qs.toString()}`);
 }
 
-export async function getLeaveRequests(): Promise<LeaveRequest[]> {
-  return request<LeaveRequest[]>(
-    '/leaves/requests',
-    { method: 'GET' },
-    () => {
-      const stored = localStorage.getItem('__mock_leaves');
-      if (stored) return JSON.parse(stored);
-      const defaults: LeaveRequest[] = [
-        {
-          id: 'lv_001',
-          leave_type: 'Annual Leave',
-          start_date: '2026-11-20',
-          end_date: '2026-11-22',
-          total_days: 3,
-          is_half_day: false,
-          reason: 'Family event and travel',
-          status: 'PENDING',
-          applied_at: '2026-11-10T09:30:00Z',
-        },
-        {
-          id: 'lv_002',
-          leave_type: 'Sick Leave',
-          start_date: '2026-10-14',
-          end_date: '2026-10-14',
-          total_days: 1,
-          is_half_day: false,
-          reason: 'Severe migraine recovery',
-          status: 'APPROVED',
-          applied_at: '2026-10-14T07:15:00Z',
-          reviewer_notes: 'Approved by Engineering Manager',
-        },
-      ];
-      localStorage.setItem('__mock_leaves', JSON.stringify(defaults));
-      return defaults;
-    }
-  );
+// ---------------------------------------------------------------------------
+// Leave
+// ---------------------------------------------------------------------------
+
+export function getLeaveTypes(): Promise<LeaveType[]> {
+  return request<LeaveType[]>('/leave/types');
 }
 
-export async function submitLeaveRequest(data: {
-  leave_type: string;
-  start_date: string;
-  end_date: string;
-  total_days: number;
-  is_half_day: boolean;
-  half_day_period?: 'FIRST_HALF' | 'SECOND_HALF';
-  reason: string;
-  document_name?: string;
-}): Promise<LeaveRequest> {
-  const newReq: LeaveRequest = {
-    id: `lv_${Date.now()}`,
-    ...data,
-    status: 'PENDING',
-    applied_at: new Date().toISOString(),
-  };
-
-  try {
-    const res = await request<LeaveRequest>('/leaves/apply', {
-      method: 'POST',
-      body: JSON.stringify(newReq),
-    });
-    return res;
-  } catch {
-    // Offline resilience: save locally and queue
-    enqueueOfflineItem('LEAVE', newReq as unknown as Record<string, unknown>);
-    const existing = await getLeaveRequests();
-    localStorage.setItem('__mock_leaves', JSON.stringify([newReq, ...existing]));
-    return newReq;
-  }
+export function getLeaveBalances(): Promise<LeaveBalance[]> {
+  return request<LeaveBalance[]>('/leave/balances');
 }
 
-export async function cancelLeaveRequest(id: string): Promise<void> {
-  try {
-    await request(`/leaves/requests/${id}/cancel`, { method: 'POST' });
-  } catch {
-    // Offline update
-    const existing = await getLeaveRequests();
-    const updated = existing.map((r) => (r.id === id ? { ...r, status: 'CANCELLED' as const } : r));
-    localStorage.setItem('__mock_leaves', JSON.stringify(updated));
-  }
+export function getLeaveRequests(): Promise<LeaveRequest[]> {
+  return request<LeaveRequest[]>('/leave/');
 }
 
-/**
- * Device Heartbeat
- */
-export async function sendDeviceHeartbeat(deviceInfo: DeviceInfo): Promise<void> {
-  try {
-    await request('/devices/heartbeat', {
-      method: 'POST',
-      body: JSON.stringify({
-        device_id: deviceInfo.device_id,
-        battery: deviceInfo.battery_percent,
-        ip: deviceInfo.ip_address,
-        os: deviceInfo.os_version,
-      }),
-    });
-  } catch {
-    // heartbeats don't strictly need offline persistence
-  }
+export function applyForLeave(payload: LeaveApplyPayload): Promise<LeaveRequest> {
+  return request<LeaveRequest>('/leave/apply', { method: 'POST', body: JSON.stringify(payload) });
 }
 
+export function withdrawLeave(id: string): Promise<LeaveRequest> {
+  return request<LeaveRequest>(`/leave/${id}/withdraw`, { method: 'POST' });
+}

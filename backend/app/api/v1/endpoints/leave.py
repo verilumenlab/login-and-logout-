@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -23,7 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.core.file_security import sanitize_filename
 from app.core.dependencies import (
     check_employee_record_access,
     get_current_active_user,
@@ -31,13 +29,13 @@ from app.core.dependencies import (
     require_permission,
     require_role,
 )
+from app.core.file_security import sanitize_filename
 from app.models.auth import User
 from app.models.employee import EmployeeProfile, ManagerAssignment
 from app.models.leave import (
     ApprovalStatus,
     LeaveApproval,
     LeaveBalance,
-    LeaveCategory,
     LeaveDocument,
     LeaveRequest,
     LeaveStatus,
@@ -55,11 +53,28 @@ from app.schemas.leave import (
     LeaveReviewRequest,
     LeaveTypeCreate,
     LeaveTypeResponse,
-    LeaveTypeUpdate,
 )
 from app.services.leave_engine import LeaveEngine, LeaveEngineError
 
 router = APIRouter()
+
+
+def _is_hr(user: User) -> bool:
+    role_name = user.role.name.strip().lower() if user.role else ""
+    return "hr" in role_name or role_name == "human resources"
+
+
+async def _leave_employee_in_org(db: AsyncSession, leave_id: uuid.UUID, user: User) -> uuid.UUID:
+    """Returns the requesting employee's id; 404 when the request belongs to another organization."""
+    employee_id = await db.scalar(
+        select(LeaveRequest.employee_id).where(
+            LeaveRequest.id == leave_id,
+            LeaveRequest.organization_id == user.organization_id,
+        )
+    )
+    if employee_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Leave request not found")
+    return employee_id
 
 
 async def get_current_employee_profile(
@@ -440,11 +455,17 @@ async def review_leave_manager(
     """
     Tier 1 Workflow: Manager review.
     - Prohibits self-approval.
-    - Ensures manager is assigned to employee (unless admin).
+    - Ensures manager is assigned to employee (unless admin, or HR for an employee with no manager).
     - If REJECT: closes request immediately.
     - If APPROVE: marks manager approval, awaits HR.
     """
+    leave_employee_id = await _leave_employee_in_org(db, leave_id, current_user)
     is_admin = bool(current_user.is_superuser or (current_user.role and "admin" in current_user.role.name.lower()))
+    if not is_admin and _is_hr(current_user):
+        has_manager = await db.scalar(
+            select(func.count(ManagerAssignment.id)).where(ManagerAssignment.employee_id == leave_employee_id)
+        )
+        is_admin = not has_manager
     try:
         leave = await LeaveEngine.process_manager_review(
             db=db,
@@ -487,6 +508,7 @@ async def review_leave_hr(
     - If REJECT: closes request immediately.
     - If APPROVE: finalizes balance, updates AttendanceDay records.
     """
+    await _leave_employee_in_org(db, leave_id, current_user)
     is_admin = bool(current_user.is_superuser or (current_user.role and "admin" in current_user.role.name.lower()))
     try:
         leave = await LeaveEngine.process_hr_review(
@@ -651,6 +673,43 @@ async def approve_leave_request_legacy(
 # ==========================================
 # Dashboards & Summaries
 # ==========================================
+
+@router.get("/team-requests", response_model=list[LeaveResponse])
+async def list_team_leave_requests(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+    status_filter: LeaveStatus | None = Query(default=None, alias="status"),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> list[LeaveResponse]:
+    """
+    Leave requests an approver may see, newest first.
+    HR / Admin: whole organization. Managers: their direct reports.
+    """
+    stmt = (
+        select(LeaveRequest)
+        .options(
+            selectinload(LeaveRequest.employee).selectinload(EmployeeProfile.department),
+            selectinload(LeaveRequest.leave_type),
+            selectinload(LeaveRequest.approvals).selectinload(LeaveApproval.approver),
+            selectinload(LeaveRequest.documents),
+        )
+        .where(LeaveRequest.organization_id == current_user.organization_id)
+        .order_by(desc(LeaveRequest.created_at))
+        .limit(limit)
+    )
+    role_name = current_user.role.name.strip().lower() if current_user.role else ""
+    if not (current_user.is_superuser or "admin" in role_name or _is_hr(current_user)):
+        if not any(word in role_name for word in ("manager", "lead", "supervisor")) or not current_user.employee_profile:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only managers, HR and administrators can view team leave")
+        team_ids = select(ManagerAssignment.employee_id).where(
+            ManagerAssignment.manager_id == current_user.employee_profile.id
+        )
+        stmt = stmt.where(LeaveRequest.employee_id.in_(team_ids))
+    if status_filter is not None:
+        stmt = stmt.where(LeaveRequest.status == status_filter)
+    leaves = (await db.execute(stmt)).scalars().all()
+    return [_serialize_leave_response(item) for item in leaves]
+
 
 @router.get("/dashboard/manager", response_model=LeaveDashboardSummary)
 async def get_manager_leave_dashboard(

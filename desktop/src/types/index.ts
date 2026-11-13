@@ -1,16 +1,8 @@
 /**
- * Shared Type Definitions for Enterprise Attendance Desktop Agent
+ * Shared Type Definitions for the Employee Desktop App
  */
 
-export type ScreenId =
-  | 'login'
-  | 'dashboard'
-  | 'attendance'
-  | 'activity'
-  | 'leave_apply'
-  | 'leave_history'
-  | 'device_info'
-  | 'settings';
+export type ScreenId = 'dashboard' | 'presence' | 'leave';
 
 export interface UserSession {
   user_id: string;
@@ -23,84 +15,6 @@ export interface UserSession {
   employee_code?: string;
   job_title?: string;
   department_name?: string;
-}
-
-export interface AuthTokens {
-  access_token: string;
-  refresh_token: string;
-  token_type: string;
-  expires_in: number;
-}
-
-export type AttendanceMode = 'CLOCKED_OUT' | 'CLOCKED_IN' | 'ON_BREAK';
-
-export interface AttendanceEvent {
-  id: string;
-  timestamp: string;
-  event_type: 'CLOCK_IN' | 'CLOCK_OUT' | 'BREAK_START' | 'BREAK_END';
-  note?: string;
-  synced: boolean;
-}
-
-export interface TodayAttendanceSummary {
-  mode: AttendanceMode;
-  clockInTime: string | null;
-  clockOutTime: string | null;
-  totalWorkedSeconds: number;
-  totalBreakSeconds: number;
-  currentBreakType: string | null;
-  currentBreakStartTime: string | null;
-  events: AttendanceEvent[];
-}
-
-export interface ActiveWindowInfo {
-  application_name: string;
-  window_title: string;
-  process_id: number;
-  idle_seconds: number;
-  is_tracking: boolean;
-}
-
-export interface AppUsageStat {
-  application_name: string;
-  seconds: number;
-  percentage: number;
-  category: 'Development' | 'Communication' | 'Documentation' | 'Browsing' | 'Other';
-}
-
-export interface ActivityTelemetry {
-  timestamp: string;
-  application_name: string;
-  window_title?: string;
-  duration_seconds: number;
-  idle_seconds: number;
-  keystrokes_count: number;
-  mouse_clicks_count: number;
-  synced: boolean;
-}
-
-export interface LeaveBalance {
-  leave_type: string;
-  total_allowed: number;
-  used: number;
-  available: number;
-}
-
-export type LeaveStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
-
-export interface LeaveRequest {
-  id: string;
-  leave_type: string;
-  start_date: string;
-  end_date: string;
-  total_days: number;
-  is_half_day: boolean;
-  half_day_period?: 'FIRST_HALF' | 'SECOND_HALF';
-  reason: string;
-  status: LeaveStatus;
-  applied_at: string;
-  reviewer_notes?: string;
-  document_name?: string;
 }
 
 export interface DeviceInfo {
@@ -118,92 +32,155 @@ export interface DeviceInfo {
   agent_version: string;
 }
 
-export interface AppSettings {
-  server_url: string;
-  autostart_enabled: boolean;
-  notifications_enabled: boolean;
-  telemetry_sample_interval_secs: number;
-  offline_sync_interval_secs: number;
-  theme: 'light' | 'dark' | 'system';
-}
+// ---------------------------------------------------------------------------
+// Presence: app login/logout + laptop Wi-Fi connect/disconnect
+// ---------------------------------------------------------------------------
 
-export interface SyncQueueItem {
-  id: string;
-  event_type: 'ATTENDANCE' | 'ACTIVITY' | 'LEAVE' | 'HEARTBEAT';
-  payload: Record<string, unknown>;
-  created_at: string;
-  retry_count: number;
-}
+export type PresenceEventType = 'APP_LOGIN' | 'APP_LOGOUT' | 'WIFI_CONNECTED' | 'WIFI_DISCONNECTED';
+export type AttendanceAction = 'CLOCK_IN' | 'CLOCK_OUT' | 'NONE';
 
-export interface ConnectionState {
-  is_online: boolean;
-  last_ping_latency_ms: number | null;
-  last_successful_sync: string | null;
-  pending_queue_count: number;
-}
-
-export type OSSessionEventType =
-  | 'OS_LOGON'
-  | 'OS_LOGOFF'
-  | 'SESSION_LOCK'
-  | 'SESSION_UNLOCK'
-  | 'SYSTEM_STARTUP'
-  | 'SYSTEM_SHUTDOWN'
-  | 'SYSTEM_SLEEP'
-  | 'SYSTEM_WAKE'
-  | 'HEARTBEAT'
-  | 'USER_ACTIVITY';
-
-export interface OSSessionEventContract {
-  event_id: string;
-  employee_id: string;
-  device_id: string;
-  operating_system: string;
-  event_type: OSSessionEventType;
+export interface PresenceEventIn {
+  client_event_id: string;
+  event_type: PresenceEventType;
   occurred_at: string;
-  sequence_number: number;
-  agent_version: string;
-  metadata: Record<string, unknown>;
+  ssid?: string | null;
+  bssid?: string | null;
+  device_id?: string | null;
 }
 
-export interface EventQueueStatus {
-  pending_events_count: number;
-  latest_sequence_number: number;
-  last_event_type: string | null;
-  last_event_time: string | null;
-  last_sync_time: string | null;
-  queue_file_path: string;
-  clock_anomalies_detected: number;
+export interface PresenceEventResult {
+  client_event_id: string;
+  status: 'RECORDED' | 'DUPLICATE' | 'REJECTED';
+  attendance_action: AttendanceAction;
+  detail?: string | null;
 }
 
-export type LocationPermissionState = 'GRANTED' | 'DENIED' | 'UNAVAILABLE' | 'PROMPT';
-export type LocationVerificationState =
-  | 'VERIFIED'
-  | 'OUTSIDE_GEOFENCE'
-  | 'UNVERIFIED'
-  | 'UNAVAILABLE'
-  | 'SPOOF_DETECTED';
-export type VerificationMethodType = 'GPS' | 'WIFI_NETWORK' | 'IP_APPROXIMATE' | 'HYBRID' | 'UNAVAILABLE';
-
-export interface LocationCapture {
-  latitude: number | null;
-  longitude: number | null;
-  accuracy_meters: number | null;
-  permission_status: LocationPermissionState;
-  ssid?: string;
-  bssid?: string;
-  ip_address?: string;
-  verification_status?: LocationVerificationState;
-  distance_meters?: number | null;
-  is_conclusive?: boolean;
-  notes?: string;
+export interface PresenceSyncResponse {
+  results: PresenceEventResult[];
+  is_logged_in: boolean;
 }
 
-export interface LocationDisclosureInfo {
-  purpose: string;
-  gps_tracking_policy: string;
-  non_conclusive_rule: string;
-  data_retention_days: number;
-  employee_rights: string[];
+export interface PresenceEventOut {
+  event_type: PresenceEventType;
+  occurred_at: string;
+  ssid: string | null;
+  attendance_action: AttendanceAction;
 }
 
+export interface PresenceDay {
+  work_date: string;
+  first_login: string | null;
+  last_logout: string | null;
+  is_logged_in: boolean;
+  worked_minutes: number;
+  status: string | null;
+  first_wifi_connected_at: string | null;
+  wifi_networks: string[];
+  events: PresenceEventOut[];
+}
+
+export interface PresenceHistory {
+  start_date: string;
+  end_date: string;
+  days: PresenceDay[];
+}
+
+export interface PresenceMonthSummary {
+  month: string;
+  working_days: number;
+  present_days: number;
+  leave_days: number;
+  upcoming_leave_days: number;
+  absent_days: number;
+  total_worked_minutes: number;
+  average_daily_minutes: number;
+  today: PresenceDay;
+}
+
+/** Current Wi-Fi state from `netsh` / `airport`. */
+export interface WifiStatus {
+  ssid: string;
+  bssid: string;
+  is_wifi: boolean;
+  timestamp: string;
+}
+
+/** A connect/disconnect read from the OS Wi-Fi log (Windows WLAN-AutoConfig). */
+export interface NativeWifiEvent {
+  kind: 'CONNECTED' | 'DISCONNECTED';
+  occurred_at: string;
+  ssid: string;
+  record_id: number;
+}
+
+export interface TrackerStatus {
+  isOnline: boolean;
+  pendingEvents: number;
+  lastSyncAt: string | null;
+  wifi: WifiStatus | null;
+  isLoggedIn: boolean | null;
+}
+
+// ---------------------------------------------------------------------------
+// Leave (matches backend /leave API)
+// ---------------------------------------------------------------------------
+
+export type LeaveStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+
+export interface LeaveType {
+  id: string;
+  name: string;
+  code: string;
+  category: string;
+  is_paid: boolean;
+  annual_allowance: number;
+  requires_attachment: boolean;
+  include_weekends: boolean;
+}
+
+export interface LeaveBalance {
+  id: string;
+  leave_type_id: string;
+  leave_type_name: string | null;
+  leave_type_code: string | null;
+  year: number;
+  allocated_days: number;
+  used_days: number;
+  pending_days: number;
+  carryover_days: number;
+}
+
+export interface LeaveApproval {
+  stage: string;
+  status: ApprovalStatus;
+  approver_name: string | null;
+  comments: string | null;
+  decided_at: string | null;
+}
+
+export interface LeaveRequest {
+  id: string;
+  leave_type_id: string;
+  leave_type_name: string | null;
+  start_date: string;
+  end_date: string;
+  total_days: number;
+  is_half_day: boolean;
+  half_day_period: string | null;
+  reason: string;
+  status: LeaveStatus;
+  manager_approval_status: ApprovalStatus;
+  hr_approval_status: ApprovalStatus;
+  created_at: string;
+  approvals: LeaveApproval[];
+}
+
+export interface LeaveApplyPayload {
+  leave_type_id: string;
+  start_date: string;
+  end_date: string;
+  is_half_day: boolean;
+  half_day_period?: 'FIRST_HALF' | 'SECOND_HALF' | null;
+  reason: string;
+}

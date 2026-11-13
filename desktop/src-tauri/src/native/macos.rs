@@ -214,6 +214,11 @@ pub fn get_connected_wifi_info() -> (String, String, bool) {
         }
     }
 
-    ("macOS Corporate Network".to_string(), "00:00:00:00:00:00".to_string(), false)
+    (String::new(), String::new(), false)
+}
+
+/// macOS has no readable Wi-Fi history log; the app polls `get_connected_wifi_info` for changes instead.
+pub fn get_wifi_events(_since: Option<&str>) -> Vec<super::WifiEvent> {
+    Vec::new()
 }
 

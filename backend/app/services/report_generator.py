@@ -878,7 +878,7 @@ class ExcelReportEngine:
             c_leave.alignment = ALIGN_CENTER
             c_leave.number_format = "0.0"
 
-            c_hrs = ws_sum.cell(row=curr_r1, column=10, value=round(emp.get("total_hours") or emp.get("net_hours", 40.0), 2))
+            c_hrs = ws_sum.cell(row=curr_r1, column=10, value=round(float(emp.get("total_hours", emp.get("net_hours", 0.0)) or 0.0), 2))
             c_hrs.alignment = ALIGN_RIGHT
             c_hrs.number_format = "#,##0.00"
 
@@ -918,9 +918,9 @@ class ExcelReportEngine:
         ws_log = wb.create_sheet(title="Login & Logout Details")
         ws_log.views.sheetView[0].showGridLines = True
 
-        ws_log.merge_cells("A1:K1")
+        ws_log.merge_cells("A1:N1")
         t2 = ws_log["A1"]
-        t2.value = "Operating System Logins, Workstation Unlocks & Daily Shift Events"
+        t2.value = "Daily Login & Logout (first app login / Wi-Fi connect to last app logout / Wi-Fi disconnect)"
         t2.font = FONT_TITLE
         t2.fill = FILL_TITLE
         t2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
@@ -931,48 +931,54 @@ class ExcelReportEngine:
             "Employee Code",
             "Employee Name",
             "Department",
-            "Clock-In",
-            "Clock-Out",
+            "Login Time",
+            "Logout Time",
             "Work Duration",
             "Break (min)",
             "Net Hours",
             "Status",
-            "Location Verification",
+            "Login Source",
+            "Logout Source",
+            "First Wi-Fi Connect",
+            "Wi-Fi Network(s)",
         ]
         row_2 = 3
         for col_idx, h in enumerate(headers_2, start=1):
             c = ws_log.cell(row=row_2, column=col_idx, value=h)
             c.font = FONT_HEADER
             c.fill = FILL_HEADER
-            c.alignment = ALIGN_CENTER if col_idx in (1, 2, 5, 6, 8, 10, 11) else ALIGN_LEFT
+            c.alignment = ALIGN_CENTER if col_idx in (1, 2, 5, 6, 8, 10, 11, 12, 13) else ALIGN_LEFT
             c.border = BORDER_CELL
         ws_log.row_dimensions[row_2].height = 22
 
         curr_r2 = 4
         for log in attendance_logs:
+            gross_h = float(log.get("gross_duration_hours") or 0.0)
             ws_log.cell(row=curr_r2, column=1, value=str(log.get("date") or log.get("work_date", ""))).alignment = ALIGN_CENTER
             ws_log.cell(row=curr_r2, column=2, value=log.get("employee_code", "")).alignment = ALIGN_CENTER
             ws_log.cell(row=curr_r2, column=3, value=log.get("employee_name", "")).alignment = ALIGN_LEFT
-            ws_log.cell(row=curr_r2, column=4, value=log.get("department", "Operations")).alignment = ALIGN_LEFT
-            ws_log.cell(row=curr_r2, column=5, value=log.get("clock_in", "--:--")).alignment = ALIGN_CENTER
-            ws_log.cell(row=curr_r2, column=6, value=log.get("clock_out", "--:--")).alignment = ALIGN_CENTER
-            ws_log.cell(row=curr_r2, column=7, value=log.get("work_duration") or f"{log.get('gross_duration_hours', 8.0):.1f}h").alignment = ALIGN_RIGHT
-            
-            c_br = ws_log.cell(row=curr_r2, column=8, value=log.get("break_minutes", int((log.get("break_duration_hours") or 0.5) * 60)))
+            ws_log.cell(row=curr_r2, column=4, value=log.get("department", "")).alignment = ALIGN_LEFT
+            ws_log.cell(row=curr_r2, column=5, value=log.get("clock_in", "")).alignment = ALIGN_CENTER
+            ws_log.cell(row=curr_r2, column=6, value=log.get("clock_out", "")).alignment = ALIGN_CENTER
+            ws_log.cell(row=curr_r2, column=7, value=log.get("work_duration") or (f"{gross_h:.1f}h" if gross_h else "")).alignment = ALIGN_RIGHT
+
+            c_br = ws_log.cell(row=curr_r2, column=8, value=log.get("break_minutes", int(float(log.get("break_duration_hours") or 0.0) * 60)))
             c_br.alignment = ALIGN_RIGHT
             c_br.number_format = "#,##0"
 
-            c_nh = ws_log.cell(row=curr_r2, column=9, value=round(log.get("net_hours") or log.get("net_duration_hours", 7.5), 2))
+            c_nh = ws_log.cell(row=curr_r2, column=9, value=round(float(log.get("net_hours", log.get("net_duration_hours", 0.0)) or 0.0), 2))
             c_nh.alignment = ALIGN_RIGHT
             c_nh.number_format = "0.00"
 
-            c_st = ws_log.cell(row=curr_r2, column=10, value=log.get("status", "PRESENT"))
-            _apply_status_badge(c_st, log.get("status", "PRESENT"))
+            c_st = ws_log.cell(row=curr_r2, column=10, value=log.get("status", ""))
+            _apply_status_badge(c_st, log.get("status", ""))
 
-            c_loc = ws_log.cell(row=curr_r2, column=11, value=log.get("location_status", "VERIFIED"))
-            _apply_status_badge(c_loc, log.get("location_status", "VERIFIED"))
+            ws_log.cell(row=curr_r2, column=11, value=log.get("location_status", "")).alignment = ALIGN_CENTER
+            ws_log.cell(row=curr_r2, column=12, value=log.get("logout_source", "")).alignment = ALIGN_CENTER
+            ws_log.cell(row=curr_r2, column=13, value=log.get("first_wifi_connected", "")).alignment = ALIGN_CENTER
+            ws_log.cell(row=curr_r2, column=14, value=log.get("wifi_networks", "")).alignment = ALIGN_LEFT
 
-            for ci in (1, 2, 3, 4, 5, 6, 7, 8, 9):
+            for ci in (1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14):
                 ws_log.cell(row=curr_r2, column=ci).border = BORDER_CELL
                 ws_log.cell(row=curr_r2, column=ci).font = FONT_REGULAR
 
@@ -1017,8 +1023,10 @@ class ExcelReportEngine:
 
         curr_r3 = 4
         for log in attendance_logs:
-            net_h = float(log.get("net_hours") or log.get("net_duration_hours") or 8.0)
-            break_h = float(log.get("break_duration_hours") or (log.get("break_minutes", 30) / 60.0))
+            if not log.get("clock_in"):
+                continue
+            net_h = float(log.get("net_hours", log.get("net_duration_hours", 0.0)) or 0.0)
+            break_h = float(log.get("break_duration_hours") or (log.get("break_minutes", 0) / 60.0))
             gross_h = net_h + break_h
             ot_h = max(0.0, net_h - 8.0)
             variance = net_h - 8.0
@@ -1111,17 +1119,17 @@ class ExcelReportEngine:
                 ws_late.cell(row=curr_r4, column=2, value=log.get("employee_code", "")).alignment = ALIGN_CENTER
                 ws_late.cell(row=curr_r4, column=3, value=log.get("employee_name", "")).alignment = ALIGN_LEFT
                 ws_late.cell(row=curr_r4, column=4, value=log.get("department", "Operations")).alignment = ALIGN_LEFT
-                ws_late.cell(row=curr_r4, column=5, value="09:00:00").alignment = ALIGN_CENTER
-                ws_late.cell(row=curr_r4, column=6, value=log.get("clock_in", "09:25:00")).alignment = ALIGN_CENTER
-                
-                c_lm = ws_late.cell(row=curr_r4, column=7, value=log.get("late_minutes", 25))
+                ws_late.cell(row=curr_r4, column=5, value=log.get("scheduled_start", "")).alignment = ALIGN_CENTER
+                ws_late.cell(row=curr_r4, column=6, value=log.get("clock_in", "")).alignment = ALIGN_CENTER
+
+                c_lm = ws_late.cell(row=curr_r4, column=7, value=log.get("late_minutes", 0))
                 c_lm.alignment = ALIGN_CENTER
                 c_lm.number_format = "#,##0"
 
                 c_st = ws_late.cell(row=curr_r4, column=8, value="LATE")
                 _apply_status_badge(c_st, "LATE")
 
-                ws_late.cell(row=curr_r4, column=9, value=log.get("remarks", "Exceeded shift threshold")).alignment = ALIGN_LEFT
+                ws_late.cell(row=curr_r4, column=9, value=log.get("remarks", "")).alignment = ALIGN_LEFT
 
                 for ci in (1, 2, 3, 4, 5, 6, 7, 9):
                     ws_late.cell(row=curr_r4, column=ci).border = BORDER_CELL
@@ -1298,18 +1306,18 @@ class ExcelReportEngine:
             ws_appr.cell(row=curr_r7, column=1, value=req_code).alignment = ALIGN_CENTER
             ws_appr.cell(row=curr_r7, column=2, value=lv.get("employee_name", "")).alignment = ALIGN_LEFT
             ws_appr.cell(row=curr_r7, column=3, value=lv.get("leave_type", "Standard Leave")).alignment = ALIGN_LEFT
-            ws_appr.cell(row=curr_r7, column=4, value=lv.get("manager_name", "Department Manager")).alignment = ALIGN_LEFT
+            ws_appr.cell(row=curr_r7, column=4, value=lv.get("manager_name") or lv.get("manager", "")).alignment = ALIGN_LEFT
 
             c_mgr = ws_appr.cell(row=curr_r7, column=5, value=lv.get("manager_status") or lv.get("manager_approval_status", "APPROVED"))
             _apply_status_badge(c_mgr, lv.get("manager_status") or lv.get("manager_approval_status", "APPROVED"))
 
-            ws_appr.cell(row=curr_r7, column=6, value=lv.get("manager_comments", "Approved per coverage schedule")).alignment = ALIGN_LEFT
-            ws_appr.cell(row=curr_r7, column=7, value=lv.get("hr_name", "HR Operations")).alignment = ALIGN_LEFT
+            ws_appr.cell(row=curr_r7, column=6, value=lv.get("manager_comments", "")).alignment = ALIGN_LEFT
+            ws_appr.cell(row=curr_r7, column=7, value=lv.get("hr_name", "")).alignment = ALIGN_LEFT
 
             c_hr = ws_appr.cell(row=curr_r7, column=8, value=lv.get("hr_status") or lv.get("hr_approval_status", "APPROVED"))
             _apply_status_badge(c_hr, lv.get("hr_status") or lv.get("hr_approval_status", "APPROVED"))
 
-            ws_appr.cell(row=curr_r7, column=9, value=lv.get("hr_comments", "Verified entitlement balance")).alignment = ALIGN_LEFT
+            ws_appr.cell(row=curr_r7, column=9, value=lv.get("hr_comments", "")).alignment = ALIGN_LEFT
 
             c_fin = ws_appr.cell(row=curr_r7, column=10, value=lv.get("status", "APPROVED"))
             _apply_status_badge(c_fin, lv.get("status", "APPROVED"))
@@ -1332,7 +1340,7 @@ class ExcelReportEngine:
 
         ws_wifi.merge_cells("A1:I1")
         t8 = ws_wifi["A1"]
-        t8.value = "Hardware Desktop Agent Wi-Fi SSID / BSSID Network Verification"
+        t8.value = "Laptop Wi-Fi Connections & Desktop App Sign-ins (every event recorded by the employee app)"
         t8.font = FONT_TITLE
         t8.fill = FILL_TITLE
         t8.alignment = Alignment(horizontal="left", vertical="center", indent=1)
@@ -1342,52 +1350,43 @@ class ExcelReportEngine:
             "Date",
             "Employee Code",
             "Employee Name",
-            "Recorded SSID",
-            "BSSID (MAC)",
-            "Authorized Office Network",
-            "Network Type",
-            "Security Protocol",
-            "Verification Status",
+            "Event",
+            "Time",
+            "Wi-Fi Network (SSID)",
+            "BSSID",
+            "Device",
+            "Attendance Effect",
         ]
         row_8 = 3
         for col_idx, h in enumerate(headers_8, start=1):
             c = ws_wifi.cell(row=row_8, column=col_idx, value=h)
             c.font = FONT_HEADER
             c.fill = FILL_HEADER
-            c.alignment = ALIGN_CENTER if col_idx in (1, 2, 5, 7, 8, 9) else ALIGN_LEFT
+            c.alignment = ALIGN_CENTER if col_idx in (1, 2, 5, 7, 9) else ALIGN_LEFT
             c.border = BORDER_CELL
         ws_wifi.row_dimensions[row_8].height = 22
 
         curr_r8 = 4
-        source_wifi = wifi_logs or [
-            {
-                "date": log.get("date") or log.get("work_date", str(start_date)),
-                "employee_code": log.get("employee_code", ""),
-                "employee_name": log.get("employee_name", ""),
-                "ssid": "Corp_Office_5G",
-                "bssid": "00:14:22:01:23:45",
-                "office_match": "Headquarters - Floor 3",
-                "net_type": "WPA3 Enterprise",
-                "sec_level": "High (802.1X)",
-                "status": "VERIFIED",
-            }
-            for log in attendance_logs
-        ]
+        if not wifi_logs:
+            ws_wifi.merge_cells("A4:I4")
+            c_none = ws_wifi["A4"]
+            c_none.value = "No Wi-Fi or desktop app events were received during this reporting period."
+            c_none.font = Font(name="Calibri", size=10, italic=True, color=COLOR_AMBER_TXT)
+            c_none.alignment = ALIGN_CENTER
+            ws_wifi.row_dimensions[4].height = 24
 
-        for item in source_wifi:
+        for item in wifi_logs or []:
             ws_wifi.cell(row=curr_r8, column=1, value=str(item.get("date", ""))).alignment = ALIGN_CENTER
             ws_wifi.cell(row=curr_r8, column=2, value=item.get("employee_code", "")).alignment = ALIGN_CENTER
             ws_wifi.cell(row=curr_r8, column=3, value=item.get("employee_name", "")).alignment = ALIGN_LEFT
-            ws_wifi.cell(row=curr_r8, column=4, value=item.get("ssid", "Corp_Office_5G")).alignment = ALIGN_LEFT
-            ws_wifi.cell(row=curr_r8, column=5, value=item.get("bssid", "00:14:22:01:23:45")).alignment = ALIGN_CENTER
-            ws_wifi.cell(row=curr_r8, column=6, value=item.get("office_match", "Headquarters - Floor 3")).alignment = ALIGN_LEFT
-            ws_wifi.cell(row=curr_r8, column=7, value=item.get("net_type", "WPA3 Enterprise")).alignment = ALIGN_CENTER
-            ws_wifi.cell(row=curr_r8, column=8, value=item.get("sec_level", "High (802.1X)")).alignment = ALIGN_CENTER
+            ws_wifi.cell(row=curr_r8, column=4, value=item.get("event", "")).alignment = ALIGN_LEFT
+            ws_wifi.cell(row=curr_r8, column=5, value=item.get("time", "")).alignment = ALIGN_CENTER
+            ws_wifi.cell(row=curr_r8, column=6, value=item.get("ssid", "")).alignment = ALIGN_LEFT
+            ws_wifi.cell(row=curr_r8, column=7, value=item.get("bssid", "")).alignment = ALIGN_CENTER
+            ws_wifi.cell(row=curr_r8, column=8, value=item.get("device", "")).alignment = ALIGN_LEFT
+            ws_wifi.cell(row=curr_r8, column=9, value=item.get("effect", "")).alignment = ALIGN_CENTER
 
-            c_v = ws_wifi.cell(row=curr_r8, column=9, value=item.get("status", "VERIFIED"))
-            _apply_status_badge(c_v, item.get("status", "VERIFIED"))
-
-            for ci in (1, 2, 3, 4, 5, 6, 7, 8):
+            for ci in range(1, 10):
                 ws_wifi.cell(row=curr_r8, column=ci).border = BORDER_CELL
                 ws_wifi.cell(row=curr_r8, column=ci).font = FONT_REGULAR
 
@@ -1430,17 +1429,17 @@ class ExcelReportEngine:
         ws_exc.row_dimensions[row_9].height = 22
 
         curr_r9 = 4
-        source_exc = exceptions_data or [
+        source_exc = exceptions_data if exceptions_data is not None else [
             {
                 "date": log.get("date") or log.get("work_date", str(start_date)),
                 "employee_code": log.get("employee_code", ""),
                 "employee_name": log.get("employee_name", ""),
                 "department": log.get("department", "Operations"),
                 "category": "LATE_ARRIVAL" if log.get("status") == "LATE" else "MISSING_CLOCK_OUT",
-                "evidence": f"Logged at {log.get('clock_in', '09:30:00')}",
+                "evidence": f"Logged at {log.get('clock_in') or 'n/a'}",
                 "severity": "LOW" if log.get("status") == "LATE" else "MEDIUM",
-                "status": "RESOLVED",
-                "remarks": "System adjustment logged",
+                "status": "OPEN",
+                "remarks": "",
             }
             for log in attendance_logs
             if str(log.get("status", "")).upper() in ("LATE", "ABSENT", "HALF_DAY")
@@ -1449,7 +1448,7 @@ class ExcelReportEngine:
         if not source_exc:
             ws_exc.merge_cells("A4:I4")
             c_none = ws_exc["A4"]
-            c_none.value = "Zero unresolved attendance exceptions. All records synchronized and verified."
+            c_none.value = "No attendance exceptions (absences, missing logouts or late logins) in this period."
             c_none.font = Font(name="Calibri", size=10, italic=True, color=COLOR_GREEN_TXT)
             c_none.fill = PatternFill(start_color=COLOR_GREEN_BG, end_color=COLOR_GREEN_BG, fill_type="solid")
             c_none.alignment = ALIGN_CENTER

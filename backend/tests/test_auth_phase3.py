@@ -22,7 +22,7 @@ from app.core.security import (
 )
 from app.core.seeds import seed_organization_leave_types, seed_permissions, seed_system_roles
 from app.models.attendance import AttendanceDay, AttendanceStatus
-from app.models.auth import LoginHistory, User
+from app.models.auth import LoginHistory, PasswordResetToken, Role, User
 from app.models.employee import EmployeeProfile, ManagerAssignment
 from app.models.leave import LeaveRequest, LeaveStatus
 from app.models.notification import EmailOutbox
@@ -250,9 +250,15 @@ async def test_successful_login_returns_tokens_and_rbac_info(
     setup_auth_environment: dict,
 ):
     email = setup_auth_environment["emp1_email"]
+    web_res = await client.post("/api/v1/auth/login", json={"email": email, "password": "EmpPass123!"})
+    assert web_res.status_code == 403
+    assert "desktop app" in web_res.json()["detail"]
+    token_res = await client.post("/api/v1/auth/token", data={"username": email, "password": "EmpPass123!"})
+    assert token_res.status_code == 403
+
     res = await client.post(
         "/api/v1/auth/login",
-        json={"email": email, "password": "EmpPass123!"},
+        json={"email": email, "password": "EmpPass123!", "client_type": "desktop"},
     )
     assert res.status_code == 200
     data = res.json()
@@ -433,10 +439,18 @@ async def test_forgot_password_and_otp_reset_flow(
 ):
     email = setup_auth_environment["emp1_email"]
 
-    # 1. Request forgot password
+    # 1. Request forgot password: secrets must only be delivered by email, never in the response
     forgot_res = await client.post("/api/v1/auth/forgot-password", json={"email": email})
     assert forgot_res.status_code == 200
-    otp_code = forgot_res.json()["otp_code"]
+    body = forgot_res.json()
+    assert "otp_code" not in body and "reset_token" not in body
+
+    user_id = setup_auth_environment["emp1_user"].id
+    reset_entry = (
+        await db_session.execute(select(PasswordResetToken).where(PasswordResetToken.user_id == user_id))
+    ).scalars().first()
+    assert reset_entry is not None
+    otp_code = reset_entry.otp_code
     assert otp_code is not None and len(otp_code) == 6
 
     # 2. Check that an EmailOutbox message was generated
@@ -445,22 +459,118 @@ async def test_forgot_password_and_otp_reset_flow(
     assert outbox_msg is not None
     assert otp_code in outbox_msg.body_html
 
-    # 3. Reset password using 6-digit OTP
     new_password = "BrandNewSecurePassword123!"
-    reset_res = await client.post(
+
+    # 3. A bare OTP without the account email must be rejected
+    unscoped_res = await client.post(
         "/api/v1/auth/reset-password",
         json={"token_or_otp": otp_code, "new_password": new_password},
+    )
+    assert unscoped_res.status_code == 400
+
+    # 4. The OTP must not work for a different account
+    wrong_account_res = await client.post(
+        "/api/v1/auth/reset-password",
+        json={"token_or_otp": otp_code, "new_password": new_password, "email": setup_auth_environment["emp2_email"]},
+    )
+    assert wrong_account_res.status_code == 400
+
+    # 5. Reset password using 6-digit OTP scoped to the account
+    reset_res = await client.post(
+        "/api/v1/auth/reset-password",
+        json={"token_or_otp": otp_code, "new_password": new_password, "email": email},
     )
     assert reset_res.status_code == 200
     assert "Password reset successfully" in reset_res.json()["message"]
 
-    # 4. Old password must fail
+    # 6. Old password must fail
     old_login = await client.post("/api/v1/auth/login", json={"email": email, "password": "EmpPass123!"})
     assert old_login.status_code == 401
 
-    # 5. New password succeeds
-    new_login = await client.post("/api/v1/auth/login", json={"email": email, "password": new_password})
+    # 7. New password succeeds
+    new_login = await client.post(
+        "/api/v1/auth/login", json={"email": email, "password": new_password, "client_type": "desktop"}
+    )
     assert new_login.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_register_requires_admin_and_blocks_privilege_escalation(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    setup_auth_environment: dict,
+):
+    org = setup_auth_environment["org"]
+    admin_role = (
+        await db_session.execute(select(Role).where(Role.name == "Administrator", Role.organization_id.is_(None)))
+    ).scalars().first()
+    employee_role_id = setup_auth_environment["emp1_user"].role_id
+
+    def new_user(**overrides):
+        body = {
+            "email": f"new_{uuid.uuid4().hex[:8]}@titan.com",
+            "password": "NewUserPass123!",
+            "organization_id": str(org.id),
+            "role_id": str(employee_role_id),
+        }
+        body.update(overrides)
+        return body
+
+    # Anonymous callers cannot register accounts, let alone superusers
+    anon_res = await client.post("/api/v1/auth/register", json=new_user(is_superuser=True, role_id=str(admin_role.id)))
+    assert anon_res.status_code == 401
+
+    # Non-admin roles are rejected
+    hr_login = await client.post(
+        "/api/v1/auth/login", json={"email": setup_auth_environment["hr_email"], "password": "HrPass123!"}
+    )
+    hr_headers = {"Authorization": f"Bearer {hr_login.json()['access_token']}"}
+    hr_res = await client.post("/api/v1/auth/register", json=new_user(), headers=hr_headers)
+    assert hr_res.status_code == 403
+
+    # A non-superuser administrator is confined to their org and cannot mint superusers
+    org_admin = User(
+        organization_id=org.id,
+        email=f"orgadmin_{uuid.uuid4().hex[:8]}@titan.com",
+        hashed_password=get_password_hash("OrgAdminPass123!"),
+        role_id=admin_role.id,
+        is_active=True,
+        is_superuser=False,
+    )
+    db_session.add(org_admin)
+    await db_session.flush()
+    admin_login = await client.post(
+        "/api/v1/auth/login", json={"email": org_admin.email, "password": "OrgAdminPass123!"}
+    )
+    admin_headers = {"Authorization": f"Bearer {admin_login.json()['access_token']}"}
+
+    escalate_res = await client.post("/api/v1/auth/register", json=new_user(is_superuser=True), headers=admin_headers)
+    assert escalate_res.status_code == 403
+
+    cross_org_res = await client.post(
+        "/api/v1/auth/register", json=new_user(organization_id=str(uuid.uuid4())), headers=admin_headers
+    )
+    assert cross_org_res.status_code == 403
+
+    bad_role_res = await client.post("/api/v1/auth/register", json=new_user(role_id=str(uuid.uuid4())), headers=admin_headers)
+    assert bad_role_res.status_code == 400
+
+    ok_res = await client.post("/api/v1/auth/register", json=new_user(), headers=admin_headers)
+    assert ok_res.status_code == 201
+    assert ok_res.json()["is_superuser"] is False
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_ignores_spoofed_x_forwarded_for(client: AsyncClient):
+    email = f"nobody_{uuid.uuid4().hex[:8]}@titan.com"
+    last = None
+    for i in range(6):
+        last = await client.post(
+            "/api/v1/auth/forgot-password",
+            json={"email": email},
+            headers={"x-enforce-rate-limit": "true", "x-forwarded-for": f"203.0.113.{i}"},
+        )
+    assert last is not None and last.status_code == 429
 
 
 # ============================================================================
@@ -481,7 +591,9 @@ async def test_account_activation_and_deactivation_lifecycle(
     admin_headers = {"Authorization": f"Bearer {admin_login.json()['access_token']}"}
 
     # Employee logins before deactivation
-    emp_login = await client.post("/api/v1/auth/login", json={"email": emp.email, "password": "EmpPass123!"})
+    emp_login = await client.post(
+        "/api/v1/auth/login", json={"email": emp.email, "password": "EmpPass123!", "client_type": "desktop"}
+    )
     assert emp_login.status_code == 200
     emp_token = emp_login.json()["access_token"]
     emp_headers = {"Authorization": f"Bearer {emp_token}"}
@@ -525,7 +637,9 @@ async def test_device_enrollment_and_administrative_blocking(
     admin_login = await client.post("/api/v1/auth/login", json={"email": admin.email, "password": "AdminPass123!"})
     admin_headers = {"Authorization": f"Bearer {admin_login.json()['access_token']}"}
 
-    emp_login = await client.post("/api/v1/auth/login", json={"email": emp.email, "password": "EmpPass123!"})
+    emp_login = await client.post(
+        "/api/v1/auth/login", json={"email": emp.email, "password": "EmpPass123!", "client_type": "desktop"}
+    )
     emp_headers = {"Authorization": f"Bearer {emp_login.json()['access_token']}"}
 
     # Desktop client enrolls workstation
@@ -570,7 +684,7 @@ async def test_device_enrollment_and_administrative_blocking(
     # Login attempt from blocked device identifier is also rejected
     blocked_login = await client.post(
         "/api/v1/auth/login",
-        json={"email": emp.email, "password": "EmpPass123!", "device_identifier": device_id_str},
+        json={"email": emp.email, "password": "EmpPass123!", "device_identifier": device_id_str, "client_type": "desktop"},
     )
     assert blocked_login.status_code == 403
     assert "blocked by an administrator" in blocked_login.json()["detail"]
@@ -701,7 +815,9 @@ async def test_rbac_employee_own_records_only(
     emp2_prof = setup_auth_environment["emp2_profile"]
     leave1 = setup_auth_environment["leave1"]
 
-    login = await client.post("/api/v1/auth/login", json={"email": emp1.email, "password": "EmpPass123!"})
+    login = await client.post(
+        "/api/v1/auth/login", json={"email": emp1.email, "password": "EmpPass123!", "client_type": "desktop"}
+    )
     headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
 
     # Employee CAN access own attendance and leaves

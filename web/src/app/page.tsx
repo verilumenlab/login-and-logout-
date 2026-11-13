@@ -1,492 +1,333 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
-  Activity,
-  AlertCircle,
-  Building2,
+  ArrowRight,
   Calendar,
-  CheckCircle2,
-  Clock,
-  Coffee,
-  FileSpreadsheet,
   Globe,
-  HardDrive,
   Laptop,
+  LogIn,
   LogOut,
-  Play,
-  Plus,
+  Palmtree,
   RefreshCw,
-  Shield,
   Sliders,
-  Square,
+  UserX,
   Users,
+  Wifi,
 } from 'lucide-react';
 import { useRole } from '@/components/RoleContext';
-import { AttendanceTrendChart, ActivityDistributionChart } from '@/components/AnalyticsCharts';
-import { apiClient, AttendanceStatusResponse, Department, Device, Employee, LeaveRequest, Office } from '@/lib/api-client';
+import { apiClient, LeaveRequest, TeamPresenceResponse } from '@/lib/api-client';
+import { formatDuration, formatTime, localDateInput, shiftDate } from '@/lib/format';
+
+interface WeekDay {
+  date: string;
+  label: string;
+  present: number;
+  onLeave: number;
+  absent: number;
+}
+
+interface AdminCounts {
+  employees: number;
+  departments: number;
+  offices: number;
+  devices: number;
+}
+
+function weekdaysSoFar(): string[] {
+  const today = new Date();
+  const monday = shiftDate(localDateInput(today), -((today.getDay() + 6) % 7));
+  const days: string[] = [];
+  for (let i = 0; i < 5; i++) {
+    const d = shiftDate(monday, i);
+    if (d > localDateInput(today)) break;
+    days.push(d);
+  }
+  return days;
+}
+
+function StatCard({
+  label,
+  value,
+  hint,
+  icon: Icon,
+  tone,
+  href,
+}: {
+  label: string;
+  value: React.ReactNode;
+  hint?: string;
+  icon: React.ComponentType<{ className?: string }>;
+  tone: string;
+  href?: string;
+}) {
+  const body = (
+    <div className="h-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 hover:border-slate-300 dark:hover:border-slate-700 transition">
+      <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
+        <span>{label}</span>
+        <Icon className={`w-4 h-4 ${tone}`} />
+      </div>
+      <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2 tabular-nums">{value}</div>
+      {hint && <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">{hint}</div>}
+    </div>
+  );
+  return href ? <Link href={href}>{body}</Link> : body;
+}
 
 export default function Home() {
-  const { role, roleLabel } = useRole();
+  const { role, user } = useRole();
+  const [today, setToday] = useState<TeamPresenceResponse | null>(null);
+  const [week, setWeek] = useState<WeekDay[]>([]);
+  const [pendingLeaves, setPendingLeaves] = useState<LeaveRequest[]>([]);
+  const [adminCounts, setAdminCounts] = useState<AdminCounts | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Real backend data states
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [offices, setOffices] = useState<Office[]>([]);
-  const [devices, setDevices] = useState<Device[]>([]);
-  const [attendanceStatus, setAttendanceStatus] = useState<AttendanceStatusResponse | null>(null);
-  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
-  const [clockActionLoading, setClockActionLoading] = useState(false);
-
-  // Fetch real data on mount and role change
-  const fetchData = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      // 1. Employees & Departments
-      const empRes = await apiClient.listEmployees({ page: 1, page_size: 10 }).catch(() => null);
-      if (empRes) setEmployees(empRes.items);
+      const days = weekdaysSoFar();
+      const [boards, leaves] = await Promise.all([
+        Promise.all(days.map((d) => apiClient.getTeamPresence(d))),
+        apiClient.listTeamLeaves('PENDING').catch(() => [] as LeaveRequest[]),
+      ]);
+      const todayBoard = await apiClient.getTeamPresence(localDateInput(new Date()));
+      setToday(todayBoard);
+      setWeek(
+        boards.map((b, i) => ({
+          date: days[i],
+          label: new Date(`${days[i]}T00:00:00`).toLocaleDateString([], { weekday: 'short' }),
+          present: b.counts.logged_in + b.counts.logged_out,
+          onLeave: b.counts.on_leave,
+          absent: b.counts.not_logged_in,
+        }))
+      );
+      setPendingLeaves(
+        leaves.filter((l) =>
+          l.status === 'PENDING' &&
+          (role === 'MANAGER' ? l.manager_approval_status === 'PENDING' : true)
+        )
+      );
 
-      const deptRes = await apiClient.listDepartments().catch(() => []);
-      setDepartments(deptRes);
-
-      // 2. Offices & Devices
-      const offRes = await apiClient.listOffices().catch(() => []);
-      setOffices(offRes);
-
-      const devRes = await apiClient.listDevices().catch(() => []);
-      setDevices(devRes);
-
-      // 3. Attendance Status
-      const attStatus = await apiClient.getAttendanceStatus().catch(() => null);
-      setAttendanceStatus(attStatus);
-
-      // 4. Leaves
-      const leaves = await apiClient.listLeaves().catch(() => []);
-      setLeaveRequests(leaves);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Error fetching dashboard data';
-      setError(msg);
+      if (role === 'ADMIN') {
+        const [emps, depts, offices, devices] = await Promise.all([
+          apiClient.listEmployees({ page: 1, page_size: 1 }).catch(() => null),
+          apiClient.listDepartments().catch(() => []),
+          apiClient.listOffices().catch(() => []),
+          apiClient.listDevices().catch(() => []),
+        ]);
+        setAdminCounts({
+          employees: emps?.total ?? 0,
+          departments: depts.length,
+          offices: offices.length,
+          devices: devices.length,
+        });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load the overview');
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchData();
   }, [role]);
 
-  // Handle Clock In / Clock Out for Employee Mode
-  const handleClockIn = async () => {
-    setClockActionLoading(true);
-    try {
-      await apiClient.clockIn('Web Portal check-in');
-      await fetchData();
-    } catch (e: any) {
-      alert(`Clock In: ${e.message || 'Operation recorded'}`);
-    } finally {
-      setClockActionLoading(false);
-    }
-  };
+  useEffect(() => {
+    load();
+  }, [load]);
 
-  const handleClockOut = async () => {
-    setClockActionLoading(true);
-    try {
-      await apiClient.clockOut('Web Portal check-out');
-      await fetchData();
-    } catch (e: any) {
-      alert(`Clock Out: ${e.message || 'Operation recorded'}`);
-    } finally {
-      setClockActionLoading(false);
-    }
-  };
-
-  const handleBreakToggle = async () => {
-    setClockActionLoading(true);
-    try {
-      if (attendanceStatus?.is_on_break) {
-        await apiClient.endBreak('Break completed via Web Portal');
-      } else {
-        await apiClient.startBreak('LUNCH', 'Lunch break via Web Portal');
-      }
-      await fetchData();
-    } catch (e: any) {
-      alert(`Break: ${e.message || 'Operation recorded'}`);
-    } finally {
-      setClockActionLoading(false);
-    }
-  };
+  const counts = today?.counts;
+  const attendanceRate =
+    counts && counts.total - counts.on_leave > 0
+      ? Math.round(((counts.logged_in + counts.logged_out) / (counts.total - counts.on_leave)) * 100)
+      : null;
+  const recentLogins = (today?.rows ?? [])
+    .filter((r) => r.first_login)
+    .sort((a, b) => (a.first_login! < b.first_login! ? -1 : 1))
+    .slice(0, 8);
+  const notLoggedIn = (today?.rows ?? []).filter((r) => r.status === 'NOT_LOGGED_IN').slice(0, 8);
+  const weekMax = Math.max(1, ...week.map((d) => d.present + d.onLeave + d.absent));
+  const scopeWord = role === 'MANAGER' ? 'team' : 'organization';
 
   return (
-    <div className="space-y-8">
-      {/* Role Hero Banner */}
-      <div className="bg-gradient-to-r from-blue-700 via-blue-800 to-indigo-900 rounded-2xl p-6 sm:p-8 text-white shadow-md relative overflow-hidden">
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div>
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-500/30 text-blue-100 border border-blue-400/30 mb-3">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              Current Workspace: {roleLabel}
-            </div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-              {role === 'ADMIN' && 'Enterprise System Administration'}
-              {role === 'HR' && 'Human Resources & Workforce Analytics'}
-              {role === 'MANAGER' && 'Department & Team Operations'}
-              {role === 'EMPLOYEE' && 'Employee Self-Service Workspace'}
-            </h1>
-            <p className="mt-1 text-sm text-blue-100/90 max-w-xl">
-              {role === 'ADMIN' && 'Tenant configuration, workforce directories, office perimeters, and immutable security audit logs.'}
-              {role === 'HR' && 'Real-time attendance roll-ups, computer session activity, geofence validations, and two-tier leave approvals.'}
-              {role === 'MANAGER' && 'Supervise direct subordinates, monitor team computer productivity, and authorize leave applications.'}
-              {role === 'EMPLOYEE' && 'Clock-in/out remotely, manage work hours, inspect attendance days, and submit leave applications.'}
-            </p>
-          </div>
-
-          {/* Quick Actions & Refresh */}
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={fetchData}
-              disabled={loading}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-semibold text-white transition backdrop-blur disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-              Refresh Data
-            </button>
-            {role === 'ADMIN' && (
-              <Link
-                href="/employees"
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-blue-800 hover:bg-blue-50 text-xs font-bold transition shadow-sm"
-              >
-                <Plus className="w-4 h-4" />
-                Add Employee
-              </Link>
-            )}
-            {role === 'HR' && (
-              <Link
-                href="/leave"
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-blue-800 hover:bg-blue-50 text-xs font-bold transition shadow-sm"
-              >
-                <Calendar className="w-4 h-4" />
-                Review Leaves
-              </Link>
-            )}
-            {role === 'EMPLOYEE' && (
-              <div className="flex items-center gap-2">
-                {!attendanceStatus?.is_clocked_in ? (
-                  <button
-                    onClick={handleClockIn}
-                    disabled={clockActionLoading}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold transition shadow-sm disabled:opacity-50"
-                  >
-                    <Play className="w-3.5 h-3.5" />
-                    Clock In
-                  </button>
-                ) : (
-                  <>
-                    <button
-                      onClick={handleBreakToggle}
-                      disabled={clockActionLoading}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition shadow-sm disabled:opacity-50"
-                    >
-                      <Coffee className="w-3.5 h-3.5" />
-                      {attendanceStatus.is_on_break ? 'End Break' : 'Start Break'}
-                    </button>
-                    <button
-                      onClick={handleClockOut}
-                      disabled={clockActionLoading}
-                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold transition shadow-sm disabled:opacity-50"
-                    >
-                      <Square className="w-3.5 h-3.5" />
-                      Clock Out
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold">Good {new Date().getHours() < 12 ? 'morning' : 'afternoon'}, {user?.display_name}</h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            Today&apos;s login &amp; logout status for your {scopeWord},{' '}
+            {new Date().toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })}.
+          </p>
         </div>
+        <button
+          onClick={load}
+          disabled={loading}
+          className="self-start sm:self-auto inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold disabled:opacity-50"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+        </button>
       </div>
 
-      {/* Metric Cards Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-        {role === 'ADMIN' && (
-          <>
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
-                <span>Total Employees</span>
-                <Users className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-              </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2">
-                {employees.length > 0 ? employees.length : 12}
-              </div>
-              <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold mt-1">
-                Active Tenant Records
-              </div>
-            </div>
+      {error && (
+        <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs">
+          {error}
+        </div>
+      )}
 
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
-                <span>Departments</span>
-                <Sliders className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-              </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2">
-                {departments.length > 0 ? departments.length : 4}
-              </div>
-              <div className="text-[11px] text-slate-500 mt-1">Configured units</div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
-                <span>Offices &amp; Sites</span>
-                <Globe className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-              </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2">
-                {offices.length > 0 ? offices.length : 2}
-              </div>
-              <div className="text-[11px] text-slate-500 mt-1">Geofence Verified</div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
-                <span>Enrolled Devices</span>
-                <Laptop className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-              </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2">
-                {devices.length > 0 ? devices.length : 6}
-              </div>
-              <div className="text-[11px] text-emerald-600 font-semibold mt-1">
-                {devices.filter((d) => !d.is_blocked).length || 6} Trusted Hardware
-              </div>
-            </div>
-          </>
-        )}
-
-        {role === 'HR' && (
-          <>
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
-                <span>Today&apos;s Attendance Rate</span>
-                <Clock className="w-4 h-4 text-emerald-600" />
-              </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2">91.4%</div>
-              <div className="text-[11px] text-emerald-600 font-semibold mt-1">Above weekly baseline</div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
-                <span>Pending Leave Approvals</span>
-                <Calendar className="w-4 h-4 text-amber-600" />
-              </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2">
-                {leaveRequests.filter((l) => l.status === 'PENDING').length}
-              </div>
-              <div className="text-[11px] text-amber-600 font-semibold mt-1">Requires HR Sign-off</div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
-                <span>Active Workstations</span>
-                <Activity className="w-4 h-4 text-blue-600" />
-              </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2">8 Live</div>
-              <div className="text-[11px] text-slate-500 mt-1">Tauri OS agents active</div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
-                <span>Reports Generated</span>
-                <FileSpreadsheet className="w-4 h-4 text-indigo-600" />
-              </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2">14</div>
-              <div className="text-[11px] text-slate-500 mt-1">Ready for export</div>
-            </div>
-          </>
-        )}
-
-        {role === 'MANAGER' && (
-          <>
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
-                <span>Team Members Present</span>
-                <Users className="w-4 h-4 text-emerald-600" />
-              </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2">5 / 6</div>
-              <div className="text-[11px] text-emerald-600 font-semibold mt-1">83% Team Presence</div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
-                <span>Subordinate Leave Requests</span>
-                <Calendar className="w-4 h-4 text-amber-600" />
-              </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2">
-                {leaveRequests.filter((l) => l.manager_approval_status === 'PENDING').length}
-              </div>
-              <div className="text-[11px] text-amber-600 font-semibold mt-1">Tier 1 Decision Required</div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
-                <span>Team Active Hours</span>
-                <Clock className="w-4 h-4 text-blue-600" />
-              </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2">38.4h</div>
-              <div className="text-[11px] text-slate-500 mt-1">Today&apos;s aggregate session</div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
-                <span>Overtime Detected</span>
-                <AlertCircle className="w-4 h-4 text-indigo-600" />
-              </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2">1 Member</div>
-              <div className="text-[11px] text-slate-500 mt-1">&gt; 8h shift duration</div>
-            </div>
-          </>
-        )}
-
-        {role === 'EMPLOYEE' && (
-          <>
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
-                <span>Current Clock Status</span>
-                <Clock className="w-4 h-4 text-blue-600" />
-              </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2">
-                {attendanceStatus?.is_clocked_in ? 'Clocked In' : 'Not Clocked In'}
-              </div>
-              <div className="text-[11px] text-emerald-600 font-semibold mt-1">
-                {attendanceStatus?.is_clocked_in
-                  ? attendanceStatus.is_on_break
-                    ? '● On Break (Lunch)'
-                    : '● Actively Working'
-                  : 'Start shift when ready'}
-              </div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
-                <span>Today&apos;s Work Time</span>
-                <Activity className="w-4 h-4 text-emerald-600" />
-              </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2">
-                {attendanceStatus ? `${Math.floor(attendanceStatus.total_work_minutes / 60)}h ${attendanceStatus.total_work_minutes % 60}m` : '0h 0m'}
-              </div>
-              <div className="text-[11px] text-slate-500 mt-1">Standard shift: 8h 00m</div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
-                <span>Available Annual Leave</span>
-                <Calendar className="w-4 h-4 text-indigo-600" />
-              </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2">12 Days</div>
-              <div className="text-[11px] text-slate-500 mt-1">3 Days Reserved / Pending</div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium">
-                <span>Location Verification</span>
-                <Globe className="w-4 h-4 text-emerald-600" />
-              </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100 mt-2">Verified</div>
-              <div className="text-[11px] text-emerald-600 font-semibold mt-1">HQ Geofence Perimeter</div>
-            </div>
-          </>
-        )}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <StatCard
+          label="Logged in now"
+          value={counts?.logged_in ?? '—'}
+          hint={counts ? `of ${counts.total} ${role === 'MANAGER' ? 'team members' : 'employees'}` : undefined}
+          icon={LogIn}
+          tone="text-emerald-600"
+          href="/presence"
+        />
+        <StatCard label="Logged out" value={counts?.logged_out ?? '—'} icon={LogOut} tone="text-slate-500" href="/presence" />
+        <StatCard label="On leave today" value={counts?.on_leave ?? '—'} icon={Palmtree} tone="text-amber-600" href="/presence" />
+        <StatCard label="Not logged in" value={counts?.not_logged_in ?? '—'} icon={UserX} tone="text-rose-600" href="/presence" />
+        <StatCard
+          label="Leave awaiting approval"
+          value={pendingLeaves.length}
+          hint={attendanceRate !== null ? `Attendance today: ${attendanceRate}%` : undefined}
+          icon={Calendar}
+          tone="text-indigo-600"
+          href="/leave"
+        />
       </div>
 
-      {/* Analytics & Charts Section */}
+      {role === 'ADMIN' && adminCounts && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard label="Employee records" value={adminCounts.employees} icon={Users} tone="text-blue-600" href="/employees" />
+          <StatCard label="Departments" value={adminCounts.departments} icon={Sliders} tone="text-indigo-600" href="/departments" />
+          <StatCard label="Offices" value={adminCounts.offices} icon={Globe} tone="text-emerald-600" href="/offices" />
+          <StatCard label="Registered laptops" value={adminCounts.devices} icon={Laptop} tone="text-amber-600" href="/devices" />
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <section className="lg:col-span-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6">
+          <div className="flex items-center justify-between mb-5">
+            <div>
+              <h2 className="font-bold text-sm">This week</h2>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">Logged in vs on leave vs not logged in, per day</p>
+            </div>
+            <div className="flex gap-3 text-[10px] text-slate-500">
+              <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-sm bg-emerald-500" /> Present</span>
+              <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-sm bg-amber-400" /> Leave</span>
+              <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-sm bg-rose-300" /> Not logged in</span>
+            </div>
+          </div>
+          {week.length === 0 ? (
+            <div className="h-40 flex items-center justify-center text-xs text-slate-400">{loading ? 'Loading…' : 'No data yet'}</div>
+          ) : (
+            <div className="flex items-end gap-4 h-44">
+              {week.map((d) => {
+                const total = d.present + d.onLeave + d.absent;
+                return (
+                  <div key={d.date} className="flex-1 flex flex-col items-center gap-2">
+                    <div className="text-[10px] font-semibold text-slate-600 dark:text-slate-300 tabular-nums">
+                      {d.present}/{total}
+                    </div>
+                    <div
+                      className="w-full max-w-[56px] flex flex-col-reverse rounded-md overflow-hidden bg-slate-100 dark:bg-slate-800"
+                      style={{ height: `${(total / weekMax) * 120 + 4}px` }}
+                      title={`${d.present} present, ${d.onLeave} on leave, ${d.absent} not logged in`}
+                    >
+                      <div className="bg-emerald-500" style={{ height: `${total ? (d.present / total) * 100 : 0}%` }} />
+                      <div className="bg-amber-400" style={{ height: `${total ? (d.onLeave / total) * 100 : 0}%` }} />
+                      <div className="bg-rose-300" style={{ height: `${total ? (d.absent / total) * 100 : 0}%` }} />
+                    </div>
+                    <div className="text-[11px] text-slate-500">{d.label}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <p className="mt-4 text-[11px] text-slate-500 dark:text-slate-400">
+            The full week is emailed as an Excel workbook every Friday evening to HR, admins and managers.
+          </p>
+        </section>
+
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-bold text-sm">Leave awaiting approval</h2>
+            <Link href="/leave" className="text-[11px] text-blue-600 font-semibold flex items-center gap-0.5">
+              Review <ArrowRight className="w-3 h-3" />
+            </Link>
+          </div>
+          {pendingLeaves.length === 0 ? (
+            <p className="text-xs text-slate-400 py-6 text-center">Nothing waiting for you.</p>
+          ) : (
+            <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+              {pendingLeaves.slice(0, 6).map((l) => (
+                <li key={l.id} className="py-2.5">
+                  <div className="text-xs font-semibold">{l.employee_name ?? 'Employee'}</div>
+                  <div className="text-[11px] text-slate-500">
+                    {l.leave_type_name ?? 'Leave'} • {l.start_date}
+                    {l.end_date !== l.start_date ? ` → ${l.end_date}` : ''} • {l.total_days} day(s)
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">Workforce Attendance Analytics</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400">Weekly physical office presence vs. authorized remote</p>
-            </div>
-            <span className="text-xs font-semibold px-2.5 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-              Week 46
-            </span>
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-bold text-sm">First logins today</h2>
+            <Link href="/presence" className="text-[11px] text-blue-600 font-semibold flex items-center gap-0.5">
+              All <ArrowRight className="w-3 h-3" />
+            </Link>
           </div>
-          <AttendanceTrendChart />
-        </div>
+          {recentLogins.length === 0 ? (
+            <p className="text-xs text-slate-400 py-6 text-center">Nobody has logged in yet today.</p>
+          ) : (
+            <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+              {recentLogins.map((r) => (
+                <li key={r.employee_id} className="py-2.5 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold truncate">{r.full_name}</div>
+                    <div className="text-[10px] text-slate-500 flex items-center gap-1">
+                      {r.wifi_networks.length > 0 && <Wifi className="w-3 h-3" />}
+                      {r.wifi_networks.join(', ') || r.department_name || r.employee_code}
+                    </div>
+                  </div>
+                  <div className="text-right text-xs tabular-nums">
+                    <div className="font-semibold">{formatTime(r.first_login)}</div>
+                    <div className="text-[10px] text-slate-500">
+                      {r.status === 'LOGGED_IN' ? 'Active' : `Out ${formatTime(r.last_logout)}`} •{' '}
+                      {formatDuration(r.worked_minutes)}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">Computer Session Telemetry</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400">Tauri OS native activity tracking breakdown</p>
-            </div>
-            <span className="text-xs font-semibold px-2.5 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-              Live Aggregate
-            </span>
-          </div>
-          <ActivityDistributionChart />
-        </div>
-      </div>
-
-      {/* Quick Navigation Panels */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs">
-        <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 mb-4">
-          Quick Access Portal Routes
-        </h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
-          <Link
-            href="/employees"
-            className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-blue-400 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 transition group text-center"
-          >
-            <Users className="w-6 h-6 text-blue-600 dark:text-blue-400 mb-2 group-hover:scale-110 transition-transform" />
-            <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">Employees</span>
-            <span className="text-[10px] text-slate-400 mt-0.5">Directory &amp; Import</span>
-          </Link>
-
-          <Link
-            href="/departments"
-            className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-400 hover:bg-indigo-50/50 dark:hover:bg-indigo-950/20 transition group text-center"
-          >
-            <Sliders className="w-6 h-6 text-indigo-600 dark:text-indigo-400 mb-2 group-hover:scale-110 transition-transform" />
-            <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">Departments</span>
-            <span className="text-[10px] text-slate-400 mt-0.5">Org Tree</span>
-          </Link>
-
-          <Link
-            href="/attendance"
-            className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-emerald-400 hover:bg-emerald-50/50 dark:hover:bg-emerald-950/20 transition group text-center"
-          >
-            <Clock className="w-6 h-6 text-emerald-600 dark:text-emerald-400 mb-2 group-hover:scale-110 transition-transform" />
-            <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">Attendance</span>
-            <span className="text-[10px] text-slate-400 mt-0.5">Rollups &amp; Shifts</span>
-          </Link>
-
-          <Link
-            href="/leave"
-            className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-amber-400 hover:bg-amber-50/50 dark:hover:bg-amber-950/20 transition group text-center"
-          >
-            <Calendar className="w-6 h-6 text-amber-600 dark:text-amber-400 mb-2 group-hover:scale-110 transition-transform" />
-            <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">Leave Approvals</span>
-            <span className="text-[10px] text-slate-400 mt-0.5">2-Tier Workflow</span>
-          </Link>
-
-          <Link
-            href="/offices"
-            className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-cyan-400 hover:bg-cyan-50/50 dark:hover:bg-cyan-950/20 transition group text-center"
-          >
-            <Globe className="w-6 h-6 text-cyan-600 dark:text-cyan-400 mb-2 group-hover:scale-110 transition-transform" />
-            <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">Offices</span>
-            <span className="text-[10px] text-slate-400 mt-0.5">Geofences &amp; WiFi</span>
-          </Link>
-
-          <Link
-            href="/reports"
-            className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-rose-400 hover:bg-rose-50/50 dark:hover:bg-rose-950/20 transition group text-center"
-          >
-            <FileSpreadsheet className="w-6 h-6 text-rose-600 dark:text-rose-400 mb-2 group-hover:scale-110 transition-transform" />
-            <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">Reports</span>
-            <span className="text-[10px] text-slate-400 mt-0.5">Excel Export</span>
-          </Link>
-        </div>
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6">
+          <h2 className="font-bold text-sm mb-3">Not logged in yet</h2>
+          {notLoggedIn.length === 0 ? (
+            <p className="text-xs text-slate-400 py-6 text-center">Everyone is accounted for.</p>
+          ) : (
+            <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+              {notLoggedIn.map((r) => (
+                <li key={r.employee_id} className="py-2.5 flex items-center justify-between">
+                  <div>
+                    <div className="text-xs font-semibold">{r.full_name}</div>
+                    <div className="text-[10px] text-slate-500">{r.department_name || r.employee_code}</div>
+                  </div>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800">
+                    No login
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       </div>
     </div>
   );

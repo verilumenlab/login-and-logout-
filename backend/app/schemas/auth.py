@@ -81,13 +81,14 @@ class ForgotPasswordRequest(BaseModel):
 
 class ForgotPasswordResponse(BaseModel):
     message: str
-    reset_token: str | None = None
-    otp_code: str | None = None
 
 
 class ResetPasswordRequest(BaseModel):
     token_or_otp: str
     new_password: str = Field(min_length=8)
+    # Required when redeeming a 6-digit OTP; ignored for full reset tokens.
+    email: EmailStr | None = None
+    organization_id: uuid.UUID | None = None
 
 
 class ActiveSessionResponse(BaseModel):

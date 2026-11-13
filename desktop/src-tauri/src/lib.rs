@@ -91,6 +91,11 @@ fn get_connected_wifi() -> serde_json::Value {
 }
 
 #[tauri::command]
+fn get_wifi_events(since: Option<String>) -> Vec<native::WifiEvent> {
+    native::get_wifi_events(since.as_deref())
+}
+
+#[tauri::command]
 fn send_desktop_notification(title: String, body: String) -> Result<(), String> {
     println!("[DESKTOP NOTIFICATION] {}: {}", title, body);
     Ok(())
@@ -255,7 +260,8 @@ pub fn run() {
             record_os_session_event,
             simulate_os_session_transition,
             sync_os_session_events,
-            get_connected_wifi
+            get_connected_wifi,
+            get_wifi_events
         ])
         .run(tauri::generate_context!())
         .expect("error while running enterprise attendance desktop application");

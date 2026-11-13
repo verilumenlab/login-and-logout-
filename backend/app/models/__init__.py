@@ -70,6 +70,7 @@ from app.models.os_event import (
     OSSessionEventType,
 )
 from app.models.organization import Organization
+from app.models.presence import PresenceAttendanceAction, PresenceEvent, PresenceEventType
 from app.models.reporting import (
     ReportFile,
     ReportJob,
@@ -113,6 +114,10 @@ __all__ = [
     # 12b. OS session events (Phase 06)
     "OSSessionEvent",
     "OSSessionEventType",
+    # 12c. Desktop presence events (app login/logout, Wi-Fi connect/disconnect)
+    "PresenceEvent",
+    "PresenceEventType",
+    "PresenceAttendanceAction",
     # 13. Agent heartbeats
     "AgentHeartbeat",
     # 14. Attendance days

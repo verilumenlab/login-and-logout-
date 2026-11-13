@@ -31,37 +31,7 @@ export default function EmailHistoryPage() {
     fetchEmails();
   }, []);
 
-  const displayEmails: EmailOutbox[] = emails.length > 0 ? emails : [
-    {
-      id: 'em-01',
-      recipient_email: 'edward@enterprise.corp',
-      subject: 'Leave Request Approved: Annual Leave (2026-11-16 to 2026-11-18)',
-      status: 'SENT',
-      retry_count: 0,
-      sent_at: '2026-11-12T09:16:00Z',
-      created_at: '2026-11-12T09:15:35Z',
-    },
-    {
-      id: 'em-02',
-      recipient_email: 'sarah@enterprise.corp',
-      subject: 'Action Required: Submit Manager Review for Team Member',
-      status: 'SENT',
-      retry_count: 0,
-      sent_at: '2026-11-12T08:31:00Z',
-      created_at: '2026-11-12T08:30:15Z',
-    },
-    {
-      id: 'em-03',
-      recipient_email: 'new_hire@enterprise.corp',
-      subject: 'Welcome to Enterprise Platform - Set Up Your Credentials',
-      status: 'SENT',
-      retry_count: 0,
-      sent_at: '2026-11-10T11:00:00Z',
-      created_at: '2026-11-10T10:59:40Z',
-    },
-  ];
-
-  const filtered = displayEmails.filter((m) => {
+  const filtered = emails.filter((m) => {
     return (
       m.recipient_email.toLowerCase().includes(search.toLowerCase()) ||
       m.subject.toLowerCase().includes(search.toLowerCase())
@@ -119,6 +89,13 @@ export default function EmailHistoryPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs font-mono">
+              {!loading && filtered.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="py-10 text-center font-sans text-slate-400">
+                    No emails have been sent yet.
+                  </td>
+                </tr>
+              )}
               {filtered.map((item) => (
                 <tr key={item.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition">
                   <td className="py-3.5 px-4 font-semibold text-slate-900 dark:text-slate-100 font-sans">

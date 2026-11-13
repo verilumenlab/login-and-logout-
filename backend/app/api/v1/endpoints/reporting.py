@@ -22,10 +22,11 @@ from app.core.database import get_db
 from app.core.dependencies import check_employee_record_access, get_current_active_user, require_role
 from app.models.attendance import AttendanceDay, AttendanceStatus
 from app.models.auth import User
-from app.models.employee import EmployeeProfile, EmploymentStatus, ManagerAssignment
+from app.models.employee import EmployeeProfile, EmploymentStatus
 from app.models.leave import LeaveRequest
-from app.models.reporting import ReportFile, ReportJob, ReportStatus, ReportType
+from app.models.reporting import ReportFile, ReportJob, ReportSchedule, ReportStatus, ReportType
 from app.services.email_service import EmailService
+from app.services.report_dataset import build_report_dataset
 from app.services.report_generator import ExcelReportEngine
 
 router = APIRouter()
@@ -348,102 +349,15 @@ async def manual_send_report(
         )
 
     now = datetime.now(UTC)
-    org_stmt = select(User.organization_id).where(User.id == current_user.id)
     org_id = current_user.organization_id
 
-    # 1. Fetch Organization Employees
-    emp_stmt = (
-        select(EmployeeProfile)
-        .options(
-            selectinload(EmployeeProfile.user),
-            selectinload(EmployeeProfile.department),
-            selectinload(EmployeeProfile.direct_managers).selectinload(ManagerAssignment.manager),
-        )
-        .where(
-            EmployeeProfile.organization_id == org_id,
-            EmployeeProfile.employment_status == EmploymentStatus.ACTIVE,
+    sched_tz = await db.scalar(
+        select(ReportSchedule.timezone).where(
+            ReportSchedule.organization_id == org_id,
+            ReportSchedule.schedule_type == payload.report_type,
         )
     )
-    emp_res = await db.execute(emp_stmt)
-    all_employees = emp_res.scalars().all()
-
-    # 2. Fetch Attendance Days
-    att_stmt = (
-        select(AttendanceDay)
-        .options(selectinload(AttendanceDay.employee))
-        .where(
-            AttendanceDay.organization_id == org_id,
-            AttendanceDay.work_date >= payload.start_date,
-            AttendanceDay.work_date <= payload.end_date,
-        )
-    )
-    att_res = await db.execute(att_stmt)
-    attendance_days = att_res.scalars().all()
-
-    # 3. Fetch Leaves
-    leave_stmt = (
-        select(LeaveRequest)
-        .options(selectinload(LeaveRequest.leave_type), selectinload(LeaveRequest.employee))
-        .where(
-            LeaveRequest.organization_id == org_id,
-            LeaveRequest.start_date <= payload.end_date,
-            LeaveRequest.end_date >= payload.start_date,
-        )
-    )
-    leave_res = await db.execute(leave_stmt)
-    leaves = leave_res.scalars().all()
-
-    # Format data for 9-worksheet engine
-    emp_map = {e.id: e for e in all_employees}
-    employees_data = [
-        {
-            "id": str(e.id),
-            "employee_code": e.employee_code,
-            "full_name": f"{e.first_name} {e.last_name}",
-            "email": e.user.email if e.user else "",
-            "department": e.department.name if e.department else "Operations",
-            "manager": ", ".join(f"{a.manager.first_name} {a.manager.last_name}" for a in e.direct_managers if a.manager) or "None",
-            "total_days": max(1, (payload.end_date - payload.start_date).days + 1),
-            "present_days": sum(1 for a in attendance_days if a.employee_id == e.id and a.status in (AttendanceStatus.PRESENT, AttendanceStatus.HALF_DAY)),
-            "late_days": sum(1 for a in attendance_days if a.employee_id == e.id and a.status == AttendanceStatus.LATE),
-            "leave_days": sum(float(l.total_days) for l in leaves if l.employee_id == e.id and l.status.value == "APPROVED"),
-            "total_hours": round(sum((a.total_work_minutes or 0) / 60.0 for a in attendance_days if a.employee_id == e.id), 2),
-        }
-        for e in all_employees
-    ]
-
-    attendance_logs = [
-        {
-            "date": str(a.work_date),
-            "employee_code": a.employee.employee_code if a.employee else "N/A",
-            "employee_name": f"{a.employee.first_name} {a.employee.last_name}" if a.employee else "Colleague",
-            "department": "Operations",
-            "clock_in": a.shift_start.strftime("%H:%M:%S") if a.shift_start else "--:--",
-            "clock_out": a.shift_end.strftime("%H:%M:%S") if a.shift_end else "--:--",
-            "net_hours": round((a.total_work_minutes or 0) / 60.0, 2),
-            "break_minutes": a.total_break_minutes or 0,
-            "gross_duration_hours": round(((a.total_work_minutes or 0) + (a.total_break_minutes or 0)) / 60.0, 2),
-            "status": a.status.value,
-            "location_status": "VERIFIED",
-        }
-        for a in attendance_days
-    ]
-
-    leaves_data = [
-        {
-            "employee_code": l.employee.employee_code if l.employee else "N/A",
-            "employee_name": f"{l.employee.first_name} {l.employee.last_name}" if l.employee else "Colleague",
-            "leave_type": l.leave_type.name if l.leave_type else "Leave",
-            "start_date": str(l.start_date),
-            "end_date": str(l.end_date),
-            "total_days": float(l.total_days),
-            "status": l.status.value,
-            "manager_status": l.manager_approval_status.value,
-            "hr_status": l.hr_approval_status.value,
-            "reason": l.reason or "Scheduled Leave",
-        }
-        for l in leaves
-    ]
+    dataset = await build_report_dataset(db, org_id, payload.start_date, payload.end_date, sched_tz or "UTC")
 
     # 4. Create Job Record
     job = ReportJob(
@@ -473,11 +387,14 @@ async def manual_send_report(
         report_title=report_title,
         start_date=payload.start_date,
         end_date=payload.end_date,
-        employees_data=employees_data,
-        attendance_logs=attendance_logs,
-        os_events=[],
-        leaves_data=leaves_data,
+        employees_data=dataset.employees_data,
+        attendance_logs=dataset.attendance_logs,
+        os_events=dataset.os_events,
+        leaves_data=dataset.leaves_data,
+        wifi_logs=dataset.wifi_logs,
+        exceptions_data=dataset.exceptions_data,
     )
+    stats = dataset.stats("Consolidated Organization")
 
     rep_file = ReportFile(
         report_job_id=job.id,
@@ -506,13 +423,7 @@ async def manual_send_report(
                 date_str=f"{payload.start_date} to {payload.end_date}",
                 attachment_path=file_path,
                 attachment_filename=file_name,
-                stats={
-                    "scope": "Consolidated Organization",
-                    "attendance_rate": 99.1,
-                    "total_working_hours": sum(e["total_hours"] for e in employees_data),
-                    "total_break_hours": 12.5,
-                    "resolved_leaves": len(leaves),
-                },
+                stats=stats,
             )
             dispatched_recipients.append(clean_email)
         except Exception as exc:

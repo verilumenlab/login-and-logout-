@@ -57,6 +57,7 @@ Interactive Swagger documentation is available at `/api/v1/docs` when running th
 
 ### 2.1 Register User
 - **Method**: `POST /api/v1/auth/register`
+- **Auth**: Bearer token for an Administrator. Non-superusers may only create users in their own organization and cannot set `is_superuser`.
 - **Body**:
 ```json
 {

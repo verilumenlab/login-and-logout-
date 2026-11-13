@@ -263,7 +263,9 @@ async def test_add_employee_with_full_assignments_and_audit_log(
     assert audit.diff_json["employee_code"] == emp_code
 
     # Verify employee can log in with initial credentials
-    login_emp = await client.post("/api/v1/auth/login", json={"email": emp_email, "password": "NewEmployeeP@ss1"})
+    login_emp = await client.post(
+        "/api/v1/auth/login", json={"email": emp_email, "password": "NewEmployeeP@ss1", "client_type": "desktop"}
+    )
     assert login_emp.status_code == 200
 
 
@@ -365,8 +367,11 @@ async def test_activate_and_deactivate_employee(client: AsyncClient, setup_emplo
     assert deact_res.json()["is_active"] is False
 
     # 2. Deactivated employee cannot log in
-    emp_login = await client.post("/api/v1/auth/login", json={"email": env["emp_email"], "password": "EmpPass123!"})
+    emp_login = await client.post(
+        "/api/v1/auth/login", json={"email": env["emp_email"], "password": "EmpPass123!", "client_type": "desktop"}
+    )
     assert emp_login.status_code == 403
+    assert "deactivated" in emp_login.json()["detail"]
 
     # 3. Reactivate employee
     act_res = await client.post(
@@ -377,7 +382,9 @@ async def test_activate_and_deactivate_employee(client: AsyncClient, setup_emplo
     assert act_res.json()["is_active"] is True
 
     # 4. Reactivated employee can log in again
-    emp_login2 = await client.post("/api/v1/auth/login", json={"email": env["emp_email"], "password": "EmpPass123!"})
+    emp_login2 = await client.post(
+        "/api/v1/auth/login", json={"email": env["emp_email"], "password": "EmpPass123!", "client_type": "desktop"}
+    )
     assert emp_login2.status_code == 200
 
 
@@ -502,7 +509,9 @@ BadDate,User,baddate_{env['uid']}@vanguard.com,BAD-02,not-a-date
 @pytest.mark.asyncio
 async def test_unauthorized_employee_cannot_manage_personnel(client: AsyncClient, setup_employee_env: dict):
     env = setup_employee_env
-    emp_login = await client.post("/api/v1/auth/login", json={"email": env["emp_email"], "password": "EmpPass123!"})
+    emp_login = await client.post(
+        "/api/v1/auth/login", json={"email": env["emp_email"], "password": "EmpPass123!", "client_type": "desktop"}
+    )
     emp_headers = {"Authorization": f"Bearer {emp_login.json()['access_token']}"}
 
     # 1. Standard employee CANNOT create employee

@@ -678,16 +678,6 @@ async def update_employee(
         diff_json=diff,
     )
     db.add(audit)
-    # Enqueue onboarding credentials notification
-    try:
-        from app.services.email_service import EmailService
-        await EmailService.notify_employee_account_creation(
-            db=db,
-            employee_id=profile.id,
-            temporary_password=raw_password,
-        )
-    except Exception:
-        pass
     await db.commit()
 
     # Reload and respond
@@ -754,16 +744,6 @@ async def toggle_employee_status(
         diff_json={"is_active": is_active, "status": emp.employment_status},
     )
     db.add(audit)
-    # Enqueue onboarding credentials notification
-    try:
-        from app.services.email_service import EmailService
-        await EmailService.notify_employee_account_creation(
-            db=db,
-            employee_id=profile.id,
-            temporary_password=raw_password,
-        )
-    except Exception:
-        pass
     await db.commit()
 
     return {

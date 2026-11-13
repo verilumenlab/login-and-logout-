@@ -54,7 +54,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       SECRET_KEY: StagingSecretKeySuperSecureMin32CharactersLong!
-      BACKEND_CORS_ORIGINS: '["http://localhost:3000", "http://localhost:8000", "tauri://localhost"]'
+      BACKEND_CORS_ORIGINS: '["http://localhost:3000", "http://localhost:8000", "tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"]'
       EMAIL_BACKEND: mock
       FRONTEND_BASE_URL: http://localhost:3000
     depends_on:

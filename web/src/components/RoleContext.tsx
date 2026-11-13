@@ -1,122 +1,143 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { apiClient } from '@/lib/api-client';
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { apiClient, AuthUser } from '@/lib/api-client';
 
-export type UserRole = 'ADMIN' | 'HR' | 'MANAGER' | 'EMPLOYEE';
+/** Roles that may use the web portal. Employees use the desktop app only. */
+export type UserRole = 'ADMIN' | 'HR' | 'MANAGER';
 
 export interface AuthUserInfo {
   id: string;
   email: string;
   role: string;
-  full_name?: string;
+  display_name: string;
   is_superuser?: boolean;
 }
 
 interface RoleContextType {
-  role: UserRole;
-  setRole: (role: UserRole) => void;
+  /** Portal role of the signed-in account (null while signed out). */
+  role: UserRole | null;
   roleLabel: string;
   user: AuthUserInfo | null;
   isAuthenticated: boolean;
-  loginUser: (token: string, userData: any) => void;
-  logoutUser: () => void;
+  /** False until the saved session has been read from storage. */
+  ready: boolean;
+  sessionMessage: string | null;
+  loginUser: (user: AuthUser) => void;
+  logoutUser: (message?: string) => Promise<void>;
 }
 
 const RoleContext = createContext<RoleContextType>({
-  role: 'ADMIN',
-  setRole: () => {},
-  roleLabel: 'Super Admin',
+  role: null,
+  roleLabel: '',
   user: null,
   isAuthenticated: false,
+  ready: false,
+  sessionMessage: null,
   loginUser: () => {},
-  logoutUser: () => {},
+  logoutUser: async () => {},
 });
 
 const ROLE_LABELS: Record<UserRole, string> = {
   ADMIN: 'Administrator',
-  HR: 'HR Representative',
-  MANAGER: 'Department Manager',
-  EMPLOYEE: 'Employee (Self-Service)',
+  HR: 'HR',
+  MANAGER: 'Manager',
 };
 
-export function normalizeRole(roleName?: string): UserRole {
-  if (!roleName) return 'ADMIN';
-  const lower = roleName.toLowerCase();
+const USER_KEY = 'portal_user';
+
+export function normalizeRole(roleName?: string, isSuperuser?: boolean): UserRole | null {
+  if (isSuperuser) return 'ADMIN';
+  const lower = (roleName || '').trim().toLowerCase();
   if (lower.includes('admin')) return 'ADMIN';
-  if (lower.includes('hr')) return 'HR';
-  if (lower.includes('manager')) return 'MANAGER';
-  return 'EMPLOYEE';
+  if (lower.includes('hr') || lower === 'human resources') return 'HR';
+  if (lower.includes('manager') || lower.includes('lead') || lower.includes('supervisor')) return 'MANAGER';
+  return null;
+}
+
+function toUserInfo(user: AuthUser): AuthUserInfo {
+  const local = user.email.split('@')[0];
+  return {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    display_name: local.charAt(0).toUpperCase() + local.slice(1),
+    is_superuser: user.is_superuser,
+  };
 }
 
 export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [role, setRoleState] = useState<UserRole>('ADMIN');
   const [user, setUser] = useState<AuthUserInfo | null>(null);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [ready, setReady] = useState(false);
+  const [sessionMessage, setSessionMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    // Check saved session on mount
-    const token = apiClient.getToken();
-    const savedRole = localStorage.getItem('portal_role') as UserRole | null;
-    const savedUser = localStorage.getItem('portal_user');
-
-    if (token) {
-      setIsAuthenticated(true);
-      apiClient.setToken(token);
-    }
-
-    if (savedUser) {
-      try {
-        const parsed = JSON.parse(savedUser);
-        setUser(parsed);
-      } catch {
-        // ignore
-      }
-    }
-
-    if (savedRole && ['ADMIN', 'HR', 'MANAGER', 'EMPLOYEE'].includes(savedRole)) {
-      setRoleState(savedRole);
-    }
+  const clearLocal = useCallback((message?: string) => {
+    apiClient.clearSession();
+    localStorage.removeItem(USER_KEY);
+    localStorage.removeItem('portal_role');
+    setUser(null);
+    setSessionMessage(message ?? null);
   }, []);
 
-  const setRole = (newRole: UserRole) => {
-    setRoleState(newRole);
-    localStorage.setItem('portal_role', newRole);
-  };
+  useEffect(() => {
+    apiClient.onSessionExpired(() => clearLocal('Your session expired. Please sign in again.'));
 
-  const loginUser = (token: string, userData: any) => {
-    apiClient.setToken(token);
-    const normalized = normalizeRole(userData.role);
-    const info: AuthUserInfo = {
-      id: userData.id,
-      email: userData.email,
-      role: userData.role,
-      full_name: userData.full_name || userData.email.split('@')[0],
-      is_superuser: userData.is_superuser,
-    };
+    const token = apiClient.getToken();
+    const saved = localStorage.getItem(USER_KEY);
+    if (token && saved) {
+      try {
+        setUser(JSON.parse(saved) as AuthUserInfo);
+      } catch {
+        clearLocal();
+      }
+      // Re-check the account with the server: the role may have changed or the account been disabled.
+      apiClient
+        .getCurrentUser()
+        .then((me) => {
+          if (!normalizeRole(me.role, me.is_superuser)) {
+            clearLocal('Employee accounts sign in with the desktop app, not the web portal.');
+            return;
+          }
+          const info = toUserInfo(me);
+          localStorage.setItem(USER_KEY, JSON.stringify(info));
+          setUser(info);
+        })
+        .catch(() => {
+          // Offline or server error: keep the saved session; a 401 is handled by onSessionExpired.
+        });
+    } else if (token || saved) {
+      clearLocal();
+    }
+    setReady(true);
+    return () => apiClient.onSessionExpired(null);
+  }, [clearLocal]);
+
+  const loginUser = useCallback((authUser: AuthUser) => {
+    const info = toUserInfo(authUser);
+    localStorage.setItem(USER_KEY, JSON.stringify(info));
+    setSessionMessage(null);
     setUser(info);
-    setIsAuthenticated(true);
-    setRole(normalized);
-    localStorage.setItem('portal_user', JSON.stringify(info));
-  };
+  }, []);
 
-  const logoutUser = () => {
-    apiClient.setToken(null);
-    setUser(null);
-    setIsAuthenticated(false);
-    localStorage.removeItem('auth_token');
-    localStorage.removeItem('portal_role');
-    localStorage.removeItem('portal_user');
-  };
+  const logoutUser = useCallback(
+    async (message?: string) => {
+      await apiClient.logout();
+      clearLocal(message);
+    },
+    [clearLocal]
+  );
+
+  const role = user ? normalizeRole(user.role, user.is_superuser) : null;
 
   return (
     <RoleContext.Provider
       value={{
         role,
-        setRole,
-        roleLabel: ROLE_LABELS[role],
+        roleLabel: role ? ROLE_LABELS[role] : '',
         user,
-        isAuthenticated,
+        isAuthenticated: user !== null && role !== null,
+        ready,
+        sessionMessage,
         loginUser,
         logoutUser,
       }}

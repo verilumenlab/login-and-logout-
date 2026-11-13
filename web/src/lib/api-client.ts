@@ -1,0 +1,893 @@
+/**
+ * Comprehensive Type-Safe API Client for Enterprise Attendance Platform (Phase 10)
+ * Connects Web Dashboards (Admin, HR, Manager, Employee) directly to FastAPI Backend.
+ */
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+
+// ==========================================
+// Models & Interfaces
+// ==========================================
+
+export interface HealthStatus {
+  status: string;
+  environment: string;
+  version: string;
+  timestamp: string;
+}
+
+export interface DetailedHealthStatus extends HealthStatus {
+  uptime_seconds: number;
+  database: {
+    status: string;
+    latency_ms?: number;
+    database?: string;
+    error?: string;
+  };
+  redis: {
+    status: string;
+    latency_ms?: number;
+    message?: string;
+    error?: string;
+  };
+  celery: {
+    status: string;
+    broker_status: string;
+    active_workers?: number;
+    error?: string;
+  };
+}
+
+export interface Department {
+  id: string;
+  organization_id: string;
+  name: string;
+  code: string;
+  parent_id?: string | null;
+  is_active: boolean;
+  employee_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DepartmentCreate {
+  name: string;
+  code: string;
+  parent_id?: string | null;
+  is_active?: boolean;
+}
+
+export interface DepartmentUpdate {
+  name?: string;
+  code?: string;
+  parent_id?: string | null;
+  is_active?: boolean;
+}
+
+export interface EmployeeManagerInfo {
+  id: string;
+  employee_code: string;
+  first_name: string;
+  last_name: string;
+  email?: string | null;
+  job_title?: string | null;
+}
+
+export interface Employee {
+  id: string;
+  user_id: string;
+  organization_id: string;
+  employee_code: string;
+  first_name: string;
+  last_name: string;
+  full_name: string;
+  email: string;
+  phone?: string | null;
+  job_title?: string | null;
+  department_id?: string | null;
+  department?: {
+    id: string;
+    name: string;
+    code: string;
+  } | null;
+  work_schedule_id?: string | null;
+  work_schedule?: {
+    id: string;
+    name: string;
+    shift_start_time: string;
+    shift_end_time: string;
+  } | null;
+  hire_date: string;
+  termination_date?: string | null;
+  employment_status: 'ACTIVE' | 'ON_LEAVE' | 'PROBATION' | 'TERMINATED';
+  is_active: boolean;
+  manager?: EmployeeManagerInfo | null;
+  hr_rep?: EmployeeManagerInfo | null;
+  metadata_json?: Record<string, any> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EmployeePagination {
+  items: Employee[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface EmployeeCreate {
+  first_name: string;
+  last_name: string;
+  email: string;
+  employee_code: string;
+  phone?: string;
+  job_title?: string;
+  department_id?: string;
+  manager_id?: string;
+  hr_rep_id?: string;
+  work_schedule_id?: string;
+  hire_date: string;
+  employment_status?: string;
+  initial_password?: string;
+}
+
+export interface EmployeeUpdate {
+  first_name?: string;
+  last_name?: string;
+  employee_code?: string;
+  phone?: string;
+  job_title?: string;
+  department_id?: string;
+  manager_id?: string;
+  hr_rep_id?: string;
+  work_schedule_id?: string;
+  hire_date?: string;
+  termination_date?: string;
+  employment_status?: string;
+  is_active?: boolean;
+}
+
+export interface EmployeeImportResult {
+  success_count: number;
+  error_count: number;
+  imported_employees: Employee[];
+  errors: {
+    row: number;
+    employee_code?: string;
+    email?: string;
+    errors: string[];
+  }[];
+}
+
+export interface OfficeGeofence {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  radius_meters: number;
+  is_active: boolean;
+}
+
+export interface OfficeNetwork {
+  id: string;
+  name: string;
+  ssid?: string | null;
+  bssid?: string | null;
+  public_ip?: string | null;
+  is_active: boolean;
+}
+
+export interface Office {
+  id: string;
+  organization_id: string;
+  name: string;
+  code: string;
+  address: string;
+  timezone: string;
+  is_active: boolean;
+  geofences?: OfficeGeofence[];
+  networks?: OfficeNetwork[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Device {
+  id: string;
+  device_identifier: string;
+  device_name: string;
+  os_name: string;
+  os_version: string;
+  platform: string;
+  mac_address?: string | null;
+  agent_version: string;
+  is_trusted: boolean;
+  is_blocked: boolean;
+  registered_at: string;
+  last_seen_at?: string | null;
+}
+
+export interface AttendanceDay {
+  id: string;
+  employee_id: string;
+  employee_name?: string;
+  employee_code?: string;
+  work_date: string;
+  status: 'PRESENT' | 'ABSENT' | 'HALF_DAY' | 'LATE' | 'ON_LEAVE' | 'HOLIDAY' | 'WEEKEND';
+  shift_start?: string | null;
+  shift_end?: string | null;
+  total_work_minutes: number;
+  total_break_minutes: number;
+  total_idle_minutes: number;
+  is_overtime: boolean;
+  late_minutes: number;
+  early_departure_minutes: number;
+  is_wfh: boolean;
+  is_missing_checkout: boolean;
+  metadata_json?: Record<string, any> | null;
+}
+
+export interface AttendanceStatusResponse {
+  is_clocked_in: boolean;
+  is_on_break: boolean;
+  today_day?: AttendanceDay | null;
+  active_break?: any | null;
+  total_work_minutes: number;
+}
+
+export interface LeaveBalance {
+  id: string;
+  leave_type_id: string;
+  leave_type_name: string;
+  leave_type_code: string;
+  year: number;
+  allocated_days: number;
+  used_days: number;
+  pending_days: number;
+  carryover_days: number;
+  available_days: number;
+}
+
+export interface LeaveRequest {
+  id: string;
+  employee_id: string;
+  employee_name?: string;
+  employee_code?: string;
+  department_name?: string;
+  leave_type_name?: string;
+  start_date: string;
+  end_date: string;
+  total_days: number;
+  is_half_day: boolean;
+  half_day_period?: string | null;
+  reason: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+  manager_approval_status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  hr_approval_status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  created_at: string;
+  withdrawn_at?: string | null;
+  approvals?: LeaveApprovalStep[];
+  documents?: any[];
+}
+
+export interface LeaveApprovalStep {
+  id: string;
+  approver_name?: string | null;
+  stage: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  comments?: string | null;
+  decided_at?: string | null;
+}
+
+export interface AuditLog {
+  id: string;
+  user_email?: string;
+  action: string;
+  entity_type: string;
+  entity_id?: string | null;
+  ip_address?: string | null;
+  diff_json?: Record<string, any> | null;
+  created_at: string;
+}
+
+export interface ReportJob {
+  id: string;
+  report_type: string;
+  status: 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  started_at?: string | null;
+  completed_at?: string | null;
+  error_message?: string | null;
+  parameters_json?: Record<string, any> | null;
+  schedule_id?: string | null;
+  idempotency_key?: string | null;
+  created_at: string;
+  files: {
+    id: string;
+    file_name: string;
+    storage_path: string;
+    file_size_bytes: number;
+    mime_type: string;
+    created_at: string;
+  }[];
+}
+
+export interface EmailOutbox {
+  id: string;
+  recipient_email: string;
+  subject: string;
+  status: 'PENDING' | 'SENT' | 'FAILED';
+  retry_count: number;
+  sent_at?: string | null;
+  created_at: string;
+}
+
+// ==========================================
+// ApiClient Class
+// ==========================================
+
+export interface ReportSchedule {
+  id: string;
+  organization_id: string;
+  schedule_type: 'DAILY' | 'WEEKLY' | 'MONTHLY';
+  cron_expression: string;
+  timezone: string;
+  is_active: boolean;
+  send_email: boolean;
+  recipient_emails: string[];
+  include_individual_reports: boolean;
+  include_manager_reports: boolean;
+  include_consolidated_report: boolean;
+  last_run_at?: string;
+  next_run_at?: string;
+  last_status?: string;
+  last_error?: string;
+  created_at: string;
+  updated_at: string;
+  recent_jobs?: ReportJob[];
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  organization_id: string;
+  role: string;
+  permissions: string[];
+  is_active: boolean;
+  is_superuser?: boolean;
+}
+
+export interface LoginResponse {
+  access_token: string;
+  refresh_token: string;
+  user: AuthUser;
+}
+
+export type TeamPresenceStatus = 'LOGGED_IN' | 'LOGGED_OUT' | 'ON_LEAVE' | 'NOT_LOGGED_IN';
+
+export interface TeamPresenceRow {
+  employee_id: string;
+  employee_code: string;
+  full_name: string;
+  department_name: string | null;
+  status: TeamPresenceStatus;
+  first_login: string | null;
+  last_logout: string | null;
+  worked_minutes: number;
+  first_wifi_connected_at: string | null;
+  wifi_networks: string[];
+  last_signal_at: string | null;
+  leave_type_name: string | null;
+}
+
+export interface TeamPresenceResponse {
+  work_date: string;
+  scope: 'ORGANIZATION' | 'TEAM';
+  counts: { total: number; logged_in: number; logged_out: number; on_leave: number; not_logged_in: number };
+  pending_leave_requests: number;
+  rows: TeamPresenceRow[];
+}
+
+export interface PresenceEvent {
+  event_type: 'APP_LOGIN' | 'APP_LOGOUT' | 'WIFI_CONNECTED' | 'WIFI_DISCONNECTED';
+  occurred_at: string;
+  ssid: string | null;
+  attendance_action: 'CLOCK_IN' | 'CLOCK_OUT' | 'NONE';
+}
+
+export interface PresenceDay {
+  work_date: string;
+  first_login: string | null;
+  last_logout: string | null;
+  is_logged_in: boolean;
+  worked_minutes: number;
+  status: string | null;
+  first_wifi_connected_at: string | null;
+  wifi_networks: string[];
+  events: PresenceEvent[];
+}
+
+export interface PresenceHistory {
+  start_date: string;
+  end_date: string;
+  days: PresenceDay[];
+}
+
+export class ApiError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+  }
+}
+
+const ACCESS_TOKEN_KEY = 'auth_token';
+const REFRESH_TOKEN_KEY = 'refresh_token';
+
+export class ApiClient {
+  private baseUrl: string;
+  private token: string | null = null;
+  private refreshInFlight: Promise<boolean> | null = null;
+  private sessionExpiredHandler: (() => void) | null = null;
+
+  constructor(baseUrl: string = API_BASE_URL) {
+    this.baseUrl = baseUrl.replace(/\/$/, '');
+  }
+
+  /** Called once when the session can no longer be refreshed (the user must sign in again). */
+  onSessionExpired(handler: (() => void) | null) {
+    this.sessionExpiredHandler = handler;
+  }
+
+  setToken(token: string | null) {
+    this.token = token;
+    if (typeof window !== 'undefined') {
+      if (token) {
+        localStorage.setItem(ACCESS_TOKEN_KEY, token);
+      } else {
+        localStorage.removeItem(ACCESS_TOKEN_KEY);
+      }
+    }
+  }
+
+  getToken(): string | null {
+    if (this.token) return this.token;
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem(ACCESS_TOKEN_KEY);
+    }
+    return null;
+  }
+
+  private setRefreshToken(token: string | null) {
+    if (typeof window === 'undefined') return;
+    if (token) localStorage.setItem(REFRESH_TOKEN_KEY, token);
+    else localStorage.removeItem(REFRESH_TOKEN_KEY);
+  }
+
+  private getRefreshToken(): string | null {
+    return typeof window !== 'undefined' ? localStorage.getItem(REFRESH_TOKEN_KEY) : null;
+  }
+
+  clearSession() {
+    this.setToken(null);
+    this.setRefreshToken(null);
+  }
+
+  private refreshAccessToken(): Promise<boolean> {
+    if (!this.refreshInFlight) {
+      this.refreshInFlight = (async () => {
+        const refreshToken = this.getRefreshToken();
+        if (!refreshToken) return false;
+        try {
+          const res = await fetch(`${this.baseUrl}/auth/refresh`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: refreshToken }),
+          });
+          if (!res.ok) return false;
+          const data = await res.json();
+          this.setToken(data.access_token);
+          if (data.refresh_token) this.setRefreshToken(data.refresh_token);
+          return true;
+        } catch {
+          return false;
+        }
+      })().finally(() => {
+        this.refreshInFlight = null;
+      });
+    }
+    return this.refreshInFlight;
+  }
+
+  private send(endpoint: string, options: RequestInit): Promise<Response> {
+    const url = `${this.baseUrl}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+    const headers: Record<string, string> = {
+      ...(options.headers as Record<string, string>),
+    };
+    if (!(options.body instanceof FormData)) {
+      headers['Content-Type'] = 'application/json';
+    }
+    const token = this.getToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return fetch(url, { ...options, headers });
+  }
+
+  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    let response = await this.send(endpoint, options);
+
+    if (response.status === 401 && !endpoint.startsWith('/auth/login') && this.getToken()) {
+      if (await this.refreshAccessToken()) {
+        response = await this.send(endpoint, options);
+      }
+      if (response.status === 401) {
+        this.clearSession();
+        this.sessionExpiredHandler?.();
+        throw new ApiError('Your session has expired. Please sign in again.', 401);
+      }
+    }
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      let errorDetail = errorBody;
+      try {
+        const parsed = JSON.parse(errorBody);
+        if (typeof parsed.detail === 'string') errorDetail = parsed.detail;
+        else if (Array.isArray(parsed.detail)) {
+          errorDetail = parsed.detail.map((d: { msg?: string }) => d.msg).filter(Boolean).join('; ');
+        }
+      } catch {
+        // use raw text
+      }
+      if (response.status === 404 && errorDetail === 'Not Found') {
+        errorDetail = 'The server does not support this page yet. Ask your administrator to update and restart the backend.';
+      }
+      throw new ApiError(errorDetail || `HTTP ${response.status}: ${response.statusText}`, response.status);
+    }
+
+    return response.json();
+  }
+
+  // --- Auth ---
+  async login(email: string, password: string): Promise<LoginResponse> {
+    const res = await this.request<LoginResponse>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: email.trim(), password, client_type: 'web' }),
+    });
+    this.setToken(res.access_token);
+    this.setRefreshToken(res.refresh_token);
+    return res;
+  }
+
+  async logout(): Promise<void> {
+    const refreshToken = this.getRefreshToken();
+    try {
+      await this.request('/auth/logout', {
+        method: 'POST',
+        ...(refreshToken ? { body: JSON.stringify({ refresh_token: refreshToken }) } : {}),
+      });
+    } catch {
+      // Signing out locally must always work.
+    }
+    this.clearSession();
+  }
+
+  async getCurrentUser(): Promise<AuthUser> {
+    return this.request<AuthUser>('/auth/me');
+  }
+
+  // --- Employee presence (login & logout board) ---
+  async getTeamPresence(date?: string): Promise<TeamPresenceResponse> {
+    return this.request<TeamPresenceResponse>(`/presence/team${date ? `?date=${date}` : ''}`);
+  }
+
+  async getEmployeePresenceHistory(employeeId: string, startDate: string, endDate: string): Promise<PresenceHistory> {
+    return this.request<PresenceHistory>(
+      `/presence/employee/${employeeId}/history?start_date=${startDate}&end_date=${endDate}`
+    );
+  }
+
+  // --- Health ---
+  async getHealth(): Promise<HealthStatus> {
+    return this.request<HealthStatus>('/health');
+  }
+
+  async getDetailedHealth(): Promise<DetailedHealthStatus> {
+    return this.request<DetailedHealthStatus>('/health/detailed');
+  }
+
+  // --- Departments ---
+  async listDepartments(): Promise<Department[]> {
+    return this.request<Department[]>('/departments/');
+  }
+
+  async createDepartment(data: DepartmentCreate): Promise<Department> {
+    return this.request<Department>('/departments/', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateDepartment(id: string, data: DepartmentUpdate): Promise<Department> {
+    return this.request<Department>(`/departments/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteDepartment(id: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>(`/departments/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // --- Employees ---
+  async listEmployees(params: {
+    search?: string;
+    department_id?: string;
+    employment_status?: string;
+    is_active?: boolean;
+    manager_id?: string;
+    page?: number;
+    page_size?: number;
+  } = {}): Promise<EmployeePagination> {
+    const searchParams = new URLSearchParams();
+    if (params.search) searchParams.append('search', params.search);
+    if (params.department_id) searchParams.append('department_id', params.department_id);
+    if (params.employment_status) searchParams.append('employment_status', params.employment_status);
+    if (params.is_active !== undefined) searchParams.append('is_active', String(params.is_active));
+    if (params.manager_id) searchParams.append('manager_id', params.manager_id);
+    if (params.page) searchParams.append('page', String(params.page));
+    if (params.page_size) searchParams.append('page_size', String(params.page_size));
+
+    const qs = searchParams.toString();
+    return this.request<EmployeePagination>(`/employees/${qs ? `?${qs}` : ''}`);
+  }
+
+  async getEmployee(id: string): Promise<Employee> {
+    return this.request<Employee>(`/employees/${id}`);
+  }
+
+  async createEmployee(data: EmployeeCreate): Promise<Employee> {
+    return this.request<Employee>('/employees/', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateEmployee(id: string, data: EmployeeUpdate): Promise<Employee> {
+    return this.request<Employee>(`/employees/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async toggleEmployeeStatus(id: string, isActive: boolean): Promise<{ message: string; is_active: boolean }> {
+    return this.request<{ message: string; is_active: boolean }>(`/employees/${id}/status?is_active=${isActive}`, {
+      method: 'POST',
+    });
+  }
+
+  async deleteEmployee(id: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>(`/employees/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async importEmployees(formData: FormData): Promise<EmployeeImportResult> {
+    return this.request<EmployeeImportResult>('/employees/import', {
+      method: 'POST',
+      body: formData,
+    });
+  }
+
+  // --- Offices ---
+  async listOffices(): Promise<Office[]> {
+    return this.request<Office[]>('/offices');
+  }
+
+  async createOffice(data: { name: string; code: string; address: string; timezone: string }): Promise<Office> {
+    return this.request<Office>('/offices', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async addGeofence(officeId: string, data: { name: string; latitude: number; longitude: number; radius_meters: number }): Promise<OfficeGeofence> {
+    return this.request<OfficeGeofence>(`/offices/${officeId}/geofences`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async addNetwork(officeId: string, data: { name: string; ssid?: string; public_ip?: string }): Promise<OfficeNetwork> {
+    return this.request<OfficeNetwork>(`/offices/${officeId}/networks`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  // --- Devices ---
+  async listDevices(): Promise<Device[]> {
+    return this.request<Device[]>('/devices/');
+  }
+
+  async blockDevice(deviceId: string): Promise<Device> {
+    return this.request<Device>(`/devices/${deviceId}/block`, { method: 'POST' });
+  }
+
+  async unblockDevice(deviceId: string): Promise<Device> {
+    return this.request<Device>(`/devices/${deviceId}/unblock`, { method: 'POST' });
+  }
+
+  // --- Attendance ---
+  async getAttendanceStatus(): Promise<AttendanceStatusResponse> {
+    return this.request<AttendanceStatusResponse>('/attendance/status');
+  }
+
+  async getAttendanceHistory(params: { start_date?: string; end_date?: string } = {}): Promise<AttendanceDay[]> {
+    const sp = new URLSearchParams();
+    if (params.start_date) sp.append('start_date', params.start_date);
+    if (params.end_date) sp.append('end_date', params.end_date);
+    const qs = sp.toString();
+    return this.request<AttendanceDay[]>(`/attendance/history${qs ? `?${qs}` : ''}`);
+  }
+
+  async clockIn(notes?: string): Promise<any> {
+    return this.request('/attendance/clock-in', {
+      method: 'POST',
+      body: JSON.stringify({ notes }),
+    });
+  }
+
+  async clockOut(notes?: string): Promise<any> {
+    return this.request('/attendance/clock-out', {
+      method: 'POST',
+      body: JSON.stringify({ notes }),
+    });
+  }
+
+  async startBreak(breakType: string = 'LUNCH', notes?: string): Promise<any> {
+    return this.request('/attendance/break/start', {
+      method: 'POST',
+      body: JSON.stringify({ break_type: breakType, notes }),
+    });
+  }
+
+  async endBreak(notes?: string): Promise<any> {
+    return this.request('/attendance/break/end', {
+      method: 'POST',
+      body: JSON.stringify({ notes }),
+    });
+  }
+
+  // --- Leaves ---
+  async listLeaves(): Promise<LeaveRequest[]> {
+    return this.request<LeaveRequest[]>('/leave/');
+  }
+
+  async listTeamLeaves(status?: LeaveRequest['status']): Promise<LeaveRequest[]> {
+    const query = status ? `?status=${status}` : '';
+    return this.request<LeaveRequest[]>(`/leave/team-requests${query}`);
+  }
+
+  async getMyBalances(): Promise<LeaveBalance[]> {
+    return this.request<LeaveBalance[]>('/leave/balances');
+  }
+
+  async applyLeave(data: {
+    leave_type_id: string;
+    start_date: string;
+    end_date: string;
+    reason: string;
+    is_half_day?: boolean;
+    half_day_period?: string;
+  }): Promise<LeaveRequest> {
+    return this.request<LeaveRequest>('/leave/apply', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async reviewManagerLeave(id: string, action: 'APPROVE' | 'REJECT', comments?: string): Promise<LeaveRequest> {
+    return this.request<LeaveRequest>(`/leave/${id}/manager-review`, {
+      method: 'POST',
+      body: JSON.stringify({ action, comments }),
+    });
+  }
+
+  async reviewHrLeave(id: string, action: 'APPROVE' | 'REJECT', comments?: string): Promise<LeaveRequest> {
+    return this.request<LeaveRequest>(`/leave/${id}/hr-review`, {
+      method: 'POST',
+      body: JSON.stringify({ action, comments }),
+    });
+  }
+
+  async withdrawLeave(id: string): Promise<LeaveRequest> {
+    return this.request<LeaveRequest>(`/leave/${id}/withdraw`, { method: 'POST' });
+  }
+
+  // --- Reports ---
+  async listReports(): Promise<ReportJob[]> {
+    return this.request<ReportJob[]>('/reports/');
+  }
+
+  async generateReport(reportType: string, parameters: Record<string, any> = {}): Promise<ReportJob> {
+    return this.request<ReportJob>('/reports/generate', {
+      method: 'POST',
+      body: JSON.stringify({ report_type: reportType, parameters }),
+    });
+  }
+
+  async previewReport(reportType: string, startDate: string, endDate: string, departmentId?: string): Promise<any> {
+    return this.request('/reports/preview', {
+      method: 'POST',
+      body: JSON.stringify({
+        report_type: reportType,
+        start_date: startDate,
+        end_date: endDate,
+        department_id: departmentId || null,
+      }),
+    });
+  }
+
+  async manualSendReport(reportType: string, startDate: string, endDate: string, recipients: string[]): Promise<any> {
+    return this.request('/reports/manual-send', {
+      method: 'POST',
+      body: JSON.stringify({
+        report_type: reportType,
+        start_date: startDate,
+        end_date: endDate,
+        recipients,
+      }),
+    });
+  }
+
+  async resetEmployeePassword(employeeId: string, temporaryPassword?: string): Promise<any> {
+    return this.request(`/employees/${employeeId}/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify({ temporary_password: temporaryPassword || null }),
+    });
+  }
+
+  async getEmployeeLoginHistory(employeeId: string, limit: number = 30): Promise<any[]> {
+    return this.request(`/employees/${employeeId}/login-history?limit=${limit}`);
+  }
+
+  // --- Audit Logs ---
+  async listAuditLogs(limit: number = 100): Promise<AuditLog[]> {
+    return this.request<AuditLog[]>(`/audit-logs/?limit=${limit}`);
+  }
+
+  // --- Emails / Notifications ---
+  async listEmailOutbox(limit: number = 50): Promise<EmailOutbox[]> {
+    return this.request<EmailOutbox[]>(`/notifications/outbox?limit=${limit}`);
+  }
+
+  // --- Report Schedules (Phase 13) ---
+  async listSchedules(): Promise<ReportSchedule[]> {
+    return this.request<ReportSchedule[]>('/schedules/');
+  }
+
+  async getSchedule(id: string): Promise<ReportSchedule> {
+    return this.request<ReportSchedule>(`/schedules/${id}`);
+  }
+
+  async updateSchedule(id: string, data: Partial<ReportSchedule>): Promise<ReportSchedule> {
+    return this.request<ReportSchedule>(`/schedules/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async manualRunSchedule(id: string, force: boolean = true, referenceDate?: string): Promise<ReportJob> {
+    return this.request<ReportJob>(`/schedules/${id}/run`, {
+      method: 'POST',
+      body: JSON.stringify({ force, reference_date: referenceDate }),
+    });
+  }
+
+  async checkMissedSchedules(): Promise<any> {
+    return this.request<any>('/schedules/check-missed', { method: 'POST' });
+  }
+}
+
+export const apiClient = new ApiClient();

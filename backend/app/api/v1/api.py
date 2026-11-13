@@ -18,6 +18,7 @@ from app.api.v1.endpoints import (
     notifications,
     offices,
     os_events,
+    presence,
     reporting,
     schedules,
     websockets,
@@ -37,6 +38,7 @@ api_router.include_router(offices.router, prefix="/offices", tags=["Offices & Ge
 api_router.include_router(locations.router, prefix="/locations", tags=["Location Verification"])
 api_router.include_router(activity.router, prefix="/activity", tags=["Computer Activity"])
 api_router.include_router(os_events.router, prefix="/os-events", tags=["OS Session Monitoring"])
+api_router.include_router(presence.router, prefix="/presence", tags=["Employee Presence"])
 api_router.include_router(leave.router, prefix="/leave", tags=["Leave Management"])
 api_router.include_router(devices.router, prefix="/devices", tags=["Device Management"])
 api_router.include_router(audit.router, prefix="/audit-logs", tags=["Audit Logs"])

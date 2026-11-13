@@ -86,7 +86,7 @@ def run_daily_reports(self: Task) -> dict[str, Any]:
     default_retry_delay=120,
 )
 def run_weekly_reports(self: Task) -> dict[str, Any]:
-    """Triggers previous-week attendance and leave digests for all active organizations."""
+    """Friday digest: this week's (Mon-Fri) attendance, Wi-Fi/login and leave Excel for all active organizations."""
     async def _execute():
         async with AsyncSessionLocal() as db:
             stmt = select(Organization.id).where(Organization.is_active.is_(True))

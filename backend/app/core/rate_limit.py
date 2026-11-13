@@ -89,12 +89,9 @@ def rate_limit(
         if "pytest" in sys.modules and request.headers.get("x-enforce-rate-limit") != "true":
             return
 
+        # Never read X-Forwarded-For here: it is client-controlled. Behind a reverse proxy, uvicorn
+        # rewrites request.client from it only for peers listed in FORWARDED_ALLOW_IPS.
         client_ip = request.client.host if request.client else "unknown"
-
-        # Forwarded IP check if behind reverse proxy
-        forwarded_for = request.headers.get("x-forwarded-for")
-        if forwarded_for:
-            client_ip = forwarded_for.split(",")[0].strip()
 
         key = f"{key_prefix}:{client_ip}:{request.url.path}"
         is_allowed, retry_after = await check_rate_limit(

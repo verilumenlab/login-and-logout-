@@ -30,48 +30,7 @@ export default function AuditLogsPage() {
     fetchLogs();
   }, []);
 
-  const displayLogs: AuditLog[] = logs.length > 0 ? logs : [
-    {
-      id: 'aud-01',
-      user_email: 'admin@enterprise.corp',
-      action: 'ORGANIZATION_SETTINGS_UPDATE',
-      entity_type: 'Organization',
-      entity_id: 'org-01',
-      ip_address: '192.168.1.105',
-      diff_json: { timezone: { old: 'UTC', new: 'America/New_York' } },
-      created_at: '2026-11-12T09:42:10Z',
-    },
-    {
-      id: 'aud-02',
-      user_email: 'hr@enterprise.corp',
-      action: 'LEAVE_REQUEST_FINAL_APPROVAL',
-      entity_type: 'LeaveRequest',
-      entity_id: 'lv-002',
-      ip_address: '10.0.4.15',
-      diff_json: { status: { old: 'PENDING', new: 'APPROVED' }, days_deducted: 0.5 },
-      created_at: '2026-11-12T09:15:30Z',
-    },
-    {
-      id: 'aud-03',
-      user_email: 'manager@enterprise.corp',
-      action: 'LEAVE_REQUEST_MANAGER_APPROVAL',
-      entity_type: 'LeaveRequest',
-      entity_id: 'lv-001',
-      ip_address: '10.0.4.88',
-      diff_json: { manager_approval_status: { old: 'PENDING', new: 'APPROVED' } },
-      created_at: '2026-11-12T08:50:00Z',
-    },
-    {
-      id: 'aud-04',
-      user_email: 'admin@enterprise.corp',
-      action: 'DEVICE_BLOCKED_UNAUTHORIZED',
-      entity_type: 'Device',
-      entity_id: 'dev-03',
-      ip_address: '192.168.1.105',
-      diff_json: { is_blocked: { old: false, new: true } },
-      created_at: '2026-11-10T14:22:00Z',
-    },
-  ];
+  const displayLogs = logs;
 
   const filtered = displayLogs.filter((l) => {
     return (
@@ -133,6 +92,13 @@ export default function AuditLogsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs font-mono">
+              {!loading && filtered.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="py-10 text-center font-sans text-slate-400">
+                    No audit entries found.
+                  </td>
+                </tr>
+              )}
               {filtered.map((item) => (
                 <tr key={item.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition">
                   <td className="py-3.5 px-4 text-slate-500">

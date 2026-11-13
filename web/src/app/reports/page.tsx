@@ -96,63 +96,7 @@ export default function ReportsPage() {
     }
   };
 
-  // Sample reports fallback if empty in current session
-  const displayReports = reports.length > 0 ? reports : [
-    {
-      id: 'rep-01',
-      report_type: 'ATTENDANCE_SUMMARY',
-      status: 'COMPLETED',
-      started_at: '2026-11-12T09:00:00Z',
-      completed_at: '2026-11-12T09:00:04Z',
-      created_at: '2026-11-12T09:00:00Z',
-      files: [
-        {
-          id: 'file-01',
-          file_name: 'attendance_summary_20261112.xlsx',
-          storage_path: '/exports/reports/attendance_summary_20261112.xlsx',
-          file_size_bytes: 38400,
-          mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          created_at: '2026-11-12T09:00:04Z',
-        },
-      ],
-    },
-    {
-      id: 'rep-02',
-      report_type: 'ACTIVITY_BREAKDOWN',
-      status: 'COMPLETED',
-      started_at: '2026-11-11T18:30:00Z',
-      completed_at: '2026-11-11T18:30:06Z',
-      created_at: '2026-11-11T18:30:00Z',
-      files: [
-        {
-          id: 'file-02',
-          file_name: 'activity_breakdown_week45.xlsx',
-          storage_path: '/exports/reports/activity_breakdown_week45.xlsx',
-          file_size_bytes: 49152,
-          mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          created_at: '2026-11-11T18:30:06Z',
-        },
-      ],
-    },
-    {
-      id: 'rep-03',
-      report_type: 'LEAVE_BALANCES',
-      status: 'COMPLETED',
-      started_at: '2026-11-01T08:00:00Z',
-      completed_at: '2026-11-01T08:00:03Z',
-      created_at: '2026-11-01T08:00:00Z',
-      files: [
-        {
-          id: 'file-03',
-          file_name: 'leave_balances_q4_audit.xlsx',
-          storage_path: '/exports/reports/leave_balances_q4_audit.xlsx',
-          file_size_bytes: 28672,
-          mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          created_at: '2026-11-01T08:00:03Z',
-        },
-      ],
-    },
-  ];
+  const displayReports = reports;
 
   return (
     <div className="space-y-6">
@@ -353,6 +297,13 @@ export default function ReportsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs font-mono">
+              {displayReports.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="py-10 text-center font-sans text-slate-400">
+                    No reports generated yet.
+                  </td>
+                </tr>
+              )}
               {displayReports.map((r) => {
                 const file = r.files && r.files.length > 0 ? r.files[0] : null;
                 return (

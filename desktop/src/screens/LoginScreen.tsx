@@ -1,51 +1,36 @@
 import React, { useState } from 'react';
-import {
-  Lock,
-  Mail,
-  Server,
-  ShieldCheck,
-  AlertCircle,
-  Loader2,
-  HardDrive,
-  Eye,
-  EyeOff,
-} from 'lucide-react';
-import { loginUser, getBackendServerUrl, setBackendServerUrl } from '../api/backend';
-import { UserSession } from '../types';
+import { AlertCircle, Eye, EyeOff, Loader2, Lock, Mail, Server, ShieldCheck } from 'lucide-react';
+import { getBackendServerUrl, loginUser, setBackendServerUrl } from '../api/backend';
+import { DeviceInfo, UserSession } from '../types';
 
 interface LoginScreenProps {
+  device: DeviceInfo | null;
   onLoginSuccess: (session: UserSession) => void;
-  deviceId: string;
+  notice?: string | null;
 }
 
-export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, deviceId }) => {
-  const [email, setEmail] = useState('employee@enterprise.corp');
-  const [password, setPassword] = useState('WelcomeTitan123!');
+export const LoginScreen: React.FC<LoginScreenProps> = ({ device, onLoginSuccess, notice }) => {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberDevice, setRememberDevice] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Server URL custom config
   const [showServerConfig, setShowServerConfig] = useState(false);
   const [serverUrl, setServerUrl] = useState(getBackendServerUrl());
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim() || !password.trim()) {
-      setError('Please provide your corporate email and password.');
+    if (!device) {
+      setError('Still reading this laptop’s details. Please try again in a moment.');
       return;
     }
-
     try {
       setLoading(true);
       setError(null);
       setBackendServerUrl(serverUrl);
-      const session = await loginUser(email, password, deviceId);
-      onLoginSuccess(session);
+      onLoginSuccess(await loginUser(email.trim(), password, device));
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Authentication failed';
-      setError(msg);
+      setError(err instanceof Error ? err.message : 'Sign-in failed');
     } finally {
       setLoading(false);
     }
@@ -54,49 +39,37 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, device
   return (
     <div className="login-wrapper">
       <div className="login-card">
-        {/* Header */}
         <div className="login-header">
           <div className="brand-badge">
-            <ShieldCheck className="w-6 h-6 text-white" />
+            <ShieldCheck className="icon-md icon-white" />
           </div>
-          <h2>Enterprise Employee Agent</h2>
-          <p className="subtitle">Secure Attendance & Activity Tracker</p>
-          <div className="mt-2 inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
-            EMPLOYEE WORKSTATION ONLY
-          </div>
+          <h2>WorkPulse Employee</h2>
+          <p className="subtitle">Sign in once — your login and logout are recorded automatically.</p>
         </div>
 
-        {/* Role Enforcement Notice */}
-        <div className="p-2.5 rounded-lg bg-amber-50/80 border border-amber-200 text-amber-800 text-[11px] leading-tight flex items-start gap-1.5 my-1">
-          <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+        <div className="notice-box">
+          <AlertCircle className="icon-sm tone-amber" />
           <span>
-            <strong>Role Notice:</strong> This desktop application is exclusively for <strong>Employee</strong> accounts.
-            Admin, HR, and Manager accounts must sign in via the web application.
+            This app is for <strong>employee</strong> accounts only. Managers, HR and admins use the web portal.
           </span>
         </div>
 
-        {/* Security Assurance Banner */}
-        <div className="security-banner">
-          <Lock className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
-          <span>Secured with OS Credential Vault (Argon2id + AES)</span>
-        </div>
-
-        {/* Error Alert */}
-        {error && (
+        {(error || notice) && (
           <div className="alert-error">
-            <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
-            <div className="text-xs">{error}</div>
+            <AlertCircle className="icon-sm" />
+            <div className="text-xs">{error || notice}</div>
           </div>
         )}
 
-        {/* Login Form */}
         <form onSubmit={handleSubmit} className="login-form">
           <div className="form-group">
-            <label>Corporate Email</label>
+            <label htmlFor="login-email">Work email</label>
             <div className="input-group">
               <Mail className="input-icon" />
               <input
+                id="login-email"
                 type="email"
+                autoComplete="username"
                 placeholder="name@company.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -106,12 +79,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, device
           </div>
 
           <div className="form-group">
-            <label>Password</label>
+            <label htmlFor="login-password">Password</label>
             <div className="input-group">
               <Lock className="input-icon" />
               <input
+                id="login-password"
                 type={showPassword ? 'text' : 'password'}
-                placeholder="••••••••••••"
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -119,66 +93,55 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, device
               <button
                 type="button"
                 className="input-toggle"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
                 onClick={() => setShowPassword(!showPassword)}
               >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                {showPassword ? <EyeOff className="icon-sm" /> : <Eye className="icon-sm" />}
               </button>
             </div>
           </div>
 
           <div className="login-row">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={rememberDevice}
-                onChange={(e) => setRememberDevice(e.target.checked)}
-              />
-              <span>Remember this device</span>
-            </label>
-            <button
-              type="button"
-              className="text-link"
-              onClick={() => setShowServerConfig(!showServerConfig)}
-            >
-              <Server className="w-3 h-3 inline mr-1" />
-              Endpoint
+            <span />
+            <button type="button" className="text-link" onClick={() => setShowServerConfig(!showServerConfig)}>
+              <Server className="icon-xs" /> Server
             </button>
           </div>
 
           {showServerConfig && (
             <div className="server-config-panel">
-              <label>API Gateway Endpoint</label>
+              <label htmlFor="server-url">Server address</label>
               <input
+                id="server-url"
                 type="text"
                 value={serverUrl}
                 onChange={(e) => setServerUrl(e.target.value)}
-                placeholder="http://localhost:8000/api/v1"
+                placeholder="https://hr.company.com/api/v1"
               />
             </div>
           )}
 
-          <button type="submit" disabled={loading} className="btn-primary w-full">
+          <button type="submit" disabled={loading || !device} className="btn btn-primary btn-block">
             {loading ? (
               <>
-                <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                Authenticating...
+                <Loader2 className="icon-sm spin" />
+                &nbsp;Signing in…
               </>
             ) : (
-              'Sign In to Workstation'
+              'Sign in'
             )}
           </button>
         </form>
 
-        {/* Device Identifier */}
-        <div className="login-footer">
-          <div className="device-id-badge">
-            <HardDrive className="w-3 h-3 text-slate-400 mr-1" />
-            <span>Hardware ID: </span>
-            <code>{deviceId}</code>
+        {device && (
+          <div className="login-footer">
+            <div className="device-id-badge">
+              <span>Laptop:</span>
+              <code>{device.machine_name}</code>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
 };
-
