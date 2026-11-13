@@ -12,6 +12,7 @@ psycopg2-binary>=2.9.9
 aiosqlite>=0.20.0
 redis>=5.0.0
 celery>=5.4.0
+packaging>=23.0  # imported by kombu's Redis transport but not declared as a kombu dependency
 python-jose[cryptography]>=3.3.0
 argon2-cffi>=23.1.0
 passlib[bcrypt]>=1.7.4
