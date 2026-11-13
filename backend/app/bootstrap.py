@@ -27,7 +27,7 @@ from sqlalchemy import func, select
 from app.core.database import AsyncSessionLocal
 from app.core.security import get_password_hash
 from app.core.seeds import seed_organization_leave_types, seed_system_roles
-from app.models.auth import User
+from app.models.auth import Role, User
 from app.models.employee import EmployeeProfile, EmploymentStatus
 from app.models.organization import Organization
 
@@ -55,25 +55,59 @@ async def _maybe_reset_admin_password(db) -> int:
 
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalars().first()
+
     if not user:
-        # First-run may have used a slightly different spelling; update the sole admin instead.
-        admins = (
-            await db.execute(select(User).where(User.is_superuser.is_(True)).order_by(User.created_at.asc()))
+        # Prefer Administrator-role accounts, then any single user in the DB.
+        admin_role_ids = (
+            await db.execute(select(Role.id).where(Role.name.in_(["Administrator", "Super Administrator"])))
         ).scalars().all()
-        if len(admins) == 1:
-            user = admins[0]
-            old_email = user.email
-            user.email = email
-            logger.info("Updating admin email from %s to %s.", old_email, email)
-        else:
+        candidates: list[User] = []
+        if admin_role_ids:
+            candidates = (
+                await db.execute(
+                    select(User).where(User.role_id.in_(admin_role_ids)).order_by(User.created_at.asc())
+                )
+            ).scalars().all()
+        if not candidates:
+            candidates = (
+                await db.execute(select(User).where(User.is_superuser.is_(True)).order_by(User.created_at.asc()))
+            ).scalars().all()
+        if not candidates:
+            candidates = (await db.execute(select(User).order_by(User.created_at.asc()))).scalars().all()
+
+        if len(candidates) == 1:
+            user = candidates[0]
+        elif candidates:
+            # Multiple admins: pick the original ADMIN-001 profile if present.
+            profile = (
+                await db.execute(
+                    select(EmployeeProfile).where(EmployeeProfile.employee_code == "ADMIN-001")
+                )
+            ).scalars().first()
+            if profile:
+                user = next((u for u in candidates if u.id == profile.user_id), None)
+            if not user:
+                user = candidates[0]
+            logger.warning(
+                "Multiple admin candidates found; resetting %s (wanted %s).",
+                user.email,
+                email,
+            )
+
+        if not user:
             logger.error(
-                "No user found with email %s, and could not uniquely identify an admin to update.",
+                "No user found with email %s, and no users exist to reset. Check BOOTSTRAP_ADMIN_EMAIL.",
                 email,
             )
             return 1
 
+        if user.email != email:
+            logger.info("Updating admin email from %s to %s.", user.email, email)
+            user.email = email
+
     user.hashed_password = get_password_hash(password)
     user.is_active = True
+    user.is_superuser = True
     await db.commit()
     logger.info(
         "Reset password for %s. Turn OFF BOOTSTRAP_RESET_PASSWORD in Render Environment now.",
