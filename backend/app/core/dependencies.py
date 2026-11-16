@@ -18,7 +18,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import decode_access_token
 from app.models.auth import Role, RolePermission, User
-from app.models.employee import EmployeeProfile, ManagerAssignment
+from app.models.employee import EmployeeProfile
 
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl=f"{settings.API_V1_STR}/auth/login",
