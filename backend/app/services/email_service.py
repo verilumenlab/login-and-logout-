@@ -175,7 +175,7 @@ class EmailService:
             if mock_delivery:
                 outbox.error_message = (
                     "Test mode (EMAIL_PROVIDER=console): logged only — not delivered to an inbox. "
-                    "On Render set EMAIL_PROVIDER=smtp (Google) or resend, plus SMTP_* / RESEND_API_KEY."
+                    "On Render set EMAIL_PROVIDER=srots with SROTS_MAIL_API_KEY (or smtp/resend)."
                 )
                 response_body = "Console mock — not delivered"
             else:

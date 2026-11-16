@@ -75,7 +75,8 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGIN_REGEX: str | None = None
 
     # Email & Notification Settings (Phase 12)
-    EMAIL_PROVIDER: str = "console"  # "console", "smtp", "resend"
+    # Providers: console | smtp | resend | srots
+    EMAIL_PROVIDER: str = "console"
     SMTP_HOST: str = "localhost"
     SMTP_PORT: int = 1025
     SMTP_USER: str = ""
@@ -83,6 +84,9 @@ class Settings(BaseSettings):
     SMTP_TLS: bool = False
     SMTP_SSL: bool = False
     RESEND_API_KEY: str = ""
+    # srots-mail gateway (https://srots-mail-905.netlify.app/api/v1/send)
+    SROTS_MAIL_API_URL: str = "https://srots-mail-905.netlify.app/api/v1/send"
+    SROTS_MAIL_API_KEY: str = ""
     DEFAULT_FROM_EMAIL: str = "noreply@enterprise.corp"
     DEFAULT_FROM_NAME: str = "Enterprise Platform Notifications"
     FRONTEND_BASE_URL: str = "http://localhost:3000"

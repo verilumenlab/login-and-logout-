@@ -5,6 +5,7 @@ Supports:
 - Console / In-Memory Mock Transport (for local development & unit test assertions)
 - SMTP Transport with STARTTLS / SSL & Attachment Support (standard mail servers)
 - Resend Transport via async HTTP REST API
+- Srots Mail gateway (POST /api/v1/send with Bearer API key)
 """
 
 from __future__ import annotations
@@ -28,6 +29,19 @@ import httpx
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _httpx_client(*, timeout: float) -> httpx.AsyncClient:
+    """Outbound HTTP client that prefers IPv4.
+
+    Render (and many PaaS hosts) often resolve Netlify/AWS dual-stack names to AAAA
+    first; without working IPv6 that surfaces as ``[Errno 101] Network is unreachable``.
+    Binding the transport to ``0.0.0.0`` forces IPv4 egress.
+    """
+    return httpx.AsyncClient(
+        timeout=timeout,
+        transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0"),
+    )
 
 
 class TransportSendResult:
@@ -91,7 +105,7 @@ class ConsoleEmailTransport(BaseEmailTransport):
         }
         self.sent_history.append(record)
         logger.info(
-            "EMAIL (console): to=%s subject=%s — not delivered; set EMAIL_PROVIDER=resend or smtp",
+            "EMAIL (console): to=%s subject=%s — not delivered; set EMAIL_PROVIDER=srots (or resend/smtp)",
             recipient_email,
             subject,
         )
@@ -272,7 +286,7 @@ class ResendEmailTransport(BaseEmailTransport):
         }
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with _httpx_client(timeout=15.0) as client:
                 res = await client.post(self.endpoint, json=payload, headers=headers)
                 if res.status_code in (200, 201):
                     data = res.json()
@@ -286,16 +300,127 @@ class ResendEmailTransport(BaseEmailTransport):
             return TransportSendResult(success=False, error_message=str(e))
 
 
+class SrotsMailTransport(BaseEmailTransport):
+    """
+    Srots Mail HTTP gateway used by other Verilumen apps.
+
+    POST {SROTS_MAIL_API_URL}
+    Authorization: Bearer {SROTS_MAIL_API_KEY}
+    {
+      "to": "...",
+      "subject": "...",
+      "body": "...",
+      "html": "...",
+      "fromName": "..."
+    }
+    """
+
+    def __init__(self, api_url: str | None = None, api_key: str | None = None) -> None:
+        self.api_url = (api_url or settings.SROTS_MAIL_API_URL or "").strip().rstrip("/")
+        self.api_key = (api_key or settings.SROTS_MAIL_API_KEY or "").strip()
+
+    async def send(
+        self,
+        recipient_email: str,
+        subject: str,
+        body_html: str,
+        body_text: str | None = None,
+        recipient_name: str | None = None,
+        sender_email: str | None = None,
+        sender_name: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> TransportSendResult:
+        if not self.api_url:
+            return TransportSendResult(success=False, error_message="SROTS_MAIL_API_URL is not configured.")
+        if not self.api_key:
+            return TransportSendResult(
+                success=False,
+                error_message="SROTS_MAIL_API_KEY is empty. Create a key in srots-mail → Settings → Send API keys.",
+            )
+
+        plain = (body_text or "").strip()
+        if not plain and body_html:
+            # Lightweight fallback so providers that require `body` still get text.
+            plain = (
+                body_html.replace("<br>", "\n")
+                .replace("<br/>", "\n")
+                .replace("<br />", "\n")
+                .replace("</p>", "\n")
+            )
+            while "<" in plain and ">" in plain:
+                start = plain.find("<")
+                end = plain.find(">", start)
+                if end == -1:
+                    break
+                plain = plain[:start] + plain[end + 1 :]
+            plain = " ".join(plain.split())
+
+        payload: dict[str, Any] = {
+            "to": recipient_email,
+            "subject": subject,
+            "body": plain or subject,
+            "html": body_html,
+            "fromName": sender_name or settings.DEFAULT_FROM_NAME,
+        }
+        if recipient_name:
+            payload["toName"] = recipient_name
+        if sender_email:
+            payload["fromEmail"] = sender_email
+
+        # Optional attachments if the gateway accepts them (ignored safely if unsupported).
+        if attachments:
+            encoded = []
+            for att in attachments:
+                file_path = att.get("path")
+                filename = att.get("filename", os.path.basename(file_path or "attachment.dat"))
+                if file_path and os.path.exists(file_path):
+                    with open(file_path, "rb") as f:
+                        encoded.append(
+                            {
+                                "filename": filename,
+                                "content": base64.b64encode(f.read()).decode("utf-8"),
+                            }
+                        )
+            if encoded:
+                payload["attachments"] = encoded
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            async with _httpx_client(timeout=30.0) as client:
+                res = await client.post(self.api_url, json=payload, headers=headers)
+                if res.status_code in (200, 201, 202):
+                    data: dict[str, Any] = {}
+                    try:
+                        data = res.json()
+                    except Exception:
+                        data = {}
+                    msg_id = str(data.get("id") or data.get("messageId") or f"srots-{uuid.uuid4().hex[:12]}")
+                    return TransportSendResult(success=True, provider_message_id=msg_id)
+                return TransportSendResult(
+                    success=False,
+                    error_message=f"Srots Mail HTTP {res.status_code}: {res.text[:500]}",
+                )
+        except Exception as e:
+            logger.warning("Srots Mail send failed to %s: %s", self.api_url, e)
+            return TransportSendResult(success=False, error_message=str(e))
+
+
 # Shared singleton instance for in-process usage and tests
 _CONSOLE_TRANSPORT = ConsoleEmailTransport()
 
 
 def get_email_transport(provider: str | None = None) -> BaseEmailTransport:
     """Returns the configured email transport implementation."""
-    prov = (provider or settings.EMAIL_PROVIDER).lower()
-    if prov == "smtp":
+    prov = (provider or settings.EMAIL_PROVIDER).lower().strip()
+    if prov in ("smtp",):
         return SMTPEmailTransport()
-    elif prov == "resend":
+    if prov in ("resend",):
         return ResendEmailTransport()
+    if prov in ("srots", "srots-mail", "srots_mail"):
+        return SrotsMailTransport()
     return _CONSOLE_TRANSPORT
 
