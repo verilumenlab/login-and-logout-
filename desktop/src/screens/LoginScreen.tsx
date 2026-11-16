@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, Eye, EyeOff, Loader2, Lock, Mail } from 'lucide-react';
-import { getBackendServerUrl, loginUser, setBackendServerUrl } from '../api/backend';
+import { getBackendServerUrl, loginUser, rememberDeviceIdentifier, setBackendServerUrl } from '../api/backend';
 import { clearSavedLogin, getSavedLogin, saveLoginCredentials } from '../api/savedLogin';
 import { DeviceInfo, UserSession } from '../types';
 
@@ -50,6 +50,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ device, onLoginSuccess
       setLoading(true);
       setError(null);
       setBackendServerUrl(getBackendServerUrl());
+      rememberDeviceIdentifier(device.device_id);
       const session = await loginUser(emailValue.trim(), passwordValue, device);
       if (remember) {
         await saveLoginCredentials(emailValue.trim(), passwordValue);

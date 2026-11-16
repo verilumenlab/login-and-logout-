@@ -693,6 +693,7 @@ async def refresh_token_endpoint(
     now = datetime.now(UTC)
     client_ip = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
+    device_identifier = (request.headers.get("X-Device-Identifier") or "").strip() or None
 
     token_hash_val = hash_token(payload.refresh_token)
 
@@ -703,6 +704,7 @@ async def refresh_token_endpoint(
             .selectinload(User.role)
             .selectinload(Role.role_permissions)
             .selectinload(RolePermission.permission),
+            selectinload(RefreshToken.user).selectinload(User.employee_profile),
         )
         .where(RefreshToken.token_hash == token_hash_val)
     )
@@ -747,6 +749,40 @@ async def refresh_token_endpoint(
             detail="User account is deactivated.",
         )
 
+    # Resolve desktop device (header preferred) and reject blocked workstations.
+    linked_device: Device | None = None
+    if device_identifier:
+        linked_device = (
+            await db.execute(
+                select(Device).where(
+                    Device.organization_id == user.organization_id,
+                    Device.device_identifier == device_identifier,
+                )
+            )
+        ).scalars().first()
+    if linked_device is None and token_record.device_name:
+        linked_device = (
+            await db.execute(
+                select(Device)
+                .where(
+                    Device.organization_id == user.organization_id,
+                    Device.device_name == token_record.device_name,
+                )
+                .order_by(desc(Device.last_seen_at), desc(Device.registered_at))
+                .limit(1)
+            )
+        ).scalars().first()
+    if linked_device and linked_device.is_blocked:
+        token_record.is_revoked = True
+        token_record.revoked_at = now
+        token_record.revocation_reason = "Device blocked by administrator"
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This device has been blocked by an administrator.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     # Rotate presented token
     token_record.is_revoked = True
     token_record.revoked_at = now
@@ -771,13 +807,17 @@ async def refresh_token_endpoint(
     await db.commit()
 
     user_info = _build_user_auth_info(user)
-    access_token_claims = {
+    access_token_claims: dict = {
         "email": user.email,
         "org_id": str(user.organization_id),
         "role": user_info.role,
         "permissions": user_info.permissions,
         "is_superuser": user.is_superuser,
     }
+    if linked_device:
+        access_token_claims["device_id"] = str(linked_device.id)
+        if user.employee_profile:
+            access_token_claims["employee_id"] = str(user.employee_profile.id)
     access_token = create_access_token(
         subject=str(user.id),
         extra_claims=access_token_claims,

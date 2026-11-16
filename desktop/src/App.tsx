@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import './App.css';
 import { DeviceInfo, ScreenId, UserSession } from './types';
 import { getNativeDeviceInfo, setUpdateContext } from './api/ipc';
-import { clearLocalSession, getStoredUserSession, logoutUser } from './api/backend';
+import { clearLocalSession, getStoredUserSession, logoutUser, rememberDeviceIdentifier } from './api/backend';
 import { bindBreakQueueToUser } from './attendance/breakTracker';
 import { bindQueueToUser } from './presence/tracker';
 import { usePresenceTracker } from './presence/usePresenceTracker';
@@ -29,13 +29,20 @@ export default function App() {
   const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
-    getNativeDeviceInfo().then(setDevice);
+    getNativeDeviceInfo().then((info) => {
+      setDevice(info);
+      rememberDeviceIdentifier(info.device_id);
+    });
   }, []);
 
-  const handleSessionExpired = useCallback(() => {
+  const handleSessionExpired = useCallback((reason?: 'expired' | 'blocked') => {
     clearLocalSession();
     setSession(null);
-    setNotice('Your session expired. Please sign in again — your login times are kept on this laptop.');
+    setNotice(
+      reason === 'blocked'
+        ? 'This device was blocked by an administrator. Contact HR/Admin to resume access.'
+        : 'Your session expired. Please sign in again — your login times are kept on this laptop.'
+    );
   }, []);
 
   const { status, breakStatus, dataVersion, refresh, recordAppLogout, recordWorkLogin, recordWorkLogout } =

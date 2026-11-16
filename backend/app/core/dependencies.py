@@ -6,24 +6,66 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy import select
+from datetime import UTC, datetime
+
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import decode_access_token
-from app.models.auth import Role, RolePermission, User
+from app.models.auth import RefreshToken, Role, RolePermission, User
+from app.models.device import Device
 from app.models.employee import EmployeeProfile
 
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl=f"{settings.API_V1_STR}/auth/login",
     auto_error=False,
 )
+
+DEVICE_BLOCKED_DETAIL = "This device has been blocked by an administrator."
+
+
+async def _assert_device_not_blocked(
+    db: AsyncSession,
+    *,
+    organization_id: uuid.UUID,
+    device_id: uuid.UUID | None = None,
+    device_identifier: str | None = None,
+) -> None:
+    """Reject authenticated desktop traffic when the workstation is blocked."""
+    identifier = (device_identifier or "").strip() or None
+    if device_id is None and not identifier:
+        return
+
+    conditions = []
+    if device_id is not None:
+        conditions.append(Device.id == device_id)
+    if identifier:
+        conditions.append(Device.device_identifier == identifier)
+
+    stmt = (
+        select(Device.id)
+        .where(
+            Device.organization_id == organization_id,
+            Device.is_blocked.is_(True),
+            or_(*conditions),
+        )
+        .limit(1)
+    )
+    blocked = (await db.execute(stmt)).scalar_one_or_none()
+    if blocked is not None:
+        # 401 so already-installed desktop apps treat this as a forced sign-out.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=DEVICE_BLOCKED_DETAIL,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 ROLE_ALIASES: dict[str, set[str]] = {
     "super admin": {"super admin", "super administrator"},
@@ -69,9 +111,12 @@ ROLE_ALIASES: dict[str, set[str]] = {
 async def get_current_user(
     token: Annotated[str | None, Depends(oauth2_scheme)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    x_device_identifier: Annotated[str | None, Header(alias="X-Device-Identifier")] = None,
+    x_client_type: Annotated[str | None, Header(alias="X-Client-Type")] = None,
 ) -> User:
     """
     Authenticate user via Bearer JWT, eager-loading role, permissions, and employee profile.
+    Desktop clients that send a device id/header are rejected immediately if that device is blocked.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -114,6 +159,41 @@ async def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is deactivated",
         )
+
+    # Enforce workstation blocks for desktop sessions (JWT claim and/or header).
+    jwt_device_id: uuid.UUID | None = None
+    raw_device_id = payload.get("device_id")
+    if raw_device_id:
+        try:
+            jwt_device_id = uuid.UUID(str(raw_device_id))
+        except ValueError:
+            jwt_device_id = None
+
+    device_identifier = (x_device_identifier or "").strip() or None
+    is_desktop = (x_client_type or "").strip().lower() == "desktop" or jwt_device_id is not None or bool(device_identifier)
+    if is_desktop:
+        try:
+            await _assert_device_not_blocked(
+                db,
+                organization_id=user.organization_id,
+                device_id=jwt_device_id,
+                device_identifier=device_identifier,
+            )
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+                # Kill refresh tokens so the desktop app cannot quietly renew access.
+                now = datetime.now(UTC)
+                await db.execute(
+                    update(RefreshToken)
+                    .where(RefreshToken.user_id == user.id, RefreshToken.is_revoked == False)  # noqa: E712
+                    .values(
+                        is_revoked=True,
+                        revoked_at=now,
+                        revocation_reason="Device blocked by administrator",
+                    )
+                )
+                await db.commit()
+            raise
 
     return user
 

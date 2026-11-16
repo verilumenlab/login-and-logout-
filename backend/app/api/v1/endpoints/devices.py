@@ -16,7 +16,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.core.dependencies import require_role
-from app.models.auth import AuditLog, User
+from app.models.auth import AuditLog, RefreshToken, User
 from app.models.device import Device, DeviceSession
 from app.models.employee import EmployeeProfile
 
@@ -89,6 +89,42 @@ async def _enrich_device(db: AsyncSession, device: Device) -> DeviceResponse:
     )
 
 
+async def _revoke_device_user_sessions(db: AsyncSession, device: Device, now: datetime) -> int:
+    """
+    End device sessions and revoke JWT refresh tokens for every employee who used this device,
+    so the desktop app cannot keep working after an admin block.
+    """
+    await db.execute(
+        update(DeviceSession)
+        .where(DeviceSession.device_id == device.id, DeviceSession.is_active == True)  # noqa: E712
+        .values(end_time=now, is_active=False)
+    )
+
+    user_ids = list(
+        (
+            await db.execute(
+                select(EmployeeProfile.user_id)
+                .join(DeviceSession, DeviceSession.employee_id == EmployeeProfile.id)
+                .where(DeviceSession.device_id == device.id)
+                .distinct()
+            )
+        ).scalars().all()
+    )
+    if not user_ids:
+        return 0
+
+    result = await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id.in_(user_ids), RefreshToken.is_revoked == False)  # noqa: E712
+        .values(
+            is_revoked=True,
+            revoked_at=now,
+            revocation_reason="Device blocked by administrator",
+        )
+    )
+    return int(result.rowcount or 0)
+
+
 @router.get("/", response_model=list[DeviceResponse])
 async def list_devices(
     current_user: User = Depends(require_role(["Admin", "Super Admin", "HR"])),
@@ -111,7 +147,7 @@ async def block_device(
     current_user: User = Depends(require_role(["Admin", "Super Admin"])),
     db: AsyncSession = Depends(get_db),
 ) -> DeviceResponse:
-    """Block a device from syncing telemetry or logging in and revoke active sessions."""
+    """Block a device, revoke desktop sessions/tokens, and stop the employee app immediately."""
     stmt = select(Device).where(
         Device.id == device_id,
         Device.organization_id == current_user.organization_id,
@@ -123,12 +159,7 @@ async def block_device(
 
     device.is_blocked = True
     now = datetime.now(UTC)
-
-    await db.execute(
-        update(DeviceSession)
-        .where(DeviceSession.device_id == device.id, DeviceSession.is_active == True)  # noqa: E712
-        .values(end_time=now, is_active=False)
-    )
+    revoked = await _revoke_device_user_sessions(db, device, now)
 
     audit_entry = AuditLog(
         organization_id=current_user.organization_id,
@@ -140,6 +171,7 @@ async def block_device(
             "device_name": device.device_name,
             "identifier": device.device_identifier,
             "is_blocked": True,
+            "refresh_tokens_revoked": revoked,
         },
     )
     db.add(audit_entry)
@@ -168,12 +200,7 @@ async def revoke_device_access(
     device.is_trusted = False
     device.is_blocked = True
     now = datetime.now(UTC)
-
-    await db.execute(
-        update(DeviceSession)
-        .where(DeviceSession.device_id == device.id, DeviceSession.is_active == True)  # noqa: E712
-        .values(end_time=now, is_active=False)
-    )
+    revoked = await _revoke_device_user_sessions(db, device, now)
 
     audit_entry = AuditLog(
         organization_id=current_user.organization_id,
@@ -186,6 +213,7 @@ async def revoke_device_access(
             "identifier": device.device_identifier,
             "is_blocked": True,
             "is_trusted": False,
+            "refresh_tokens_revoked": revoked,
         },
     )
     db.add(audit_entry)

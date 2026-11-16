@@ -7,7 +7,7 @@ import {
   onPowerEventQueued,
   setPresenceSession,
 } from '../api/ipc';
-import { NetworkError, SessionExpiredError, pingBackend } from '../api/backend';
+import { DeviceBlockedError, NetworkError, SessionExpiredError, pingBackend } from '../api/backend';
 import {
   bindBreakQueueToUser,
   endAutoBreak,
@@ -48,7 +48,7 @@ export type BreakTrackerStatus = {
 export function usePresenceTracker(
   device: DeviceInfo | null,
   active: boolean,
-  onSessionExpired: () => void,
+  onSessionExpired: (reason?: 'expired' | 'blocked') => void,
   session: UserSession | null = null
 ) {
   const [status, setStatus] = useState<TrackerStatus>({
@@ -126,8 +126,10 @@ export function usePresenceTracker(
       // Always bump so Dashboard / Leave / Login history auto-refresh.
       setVersion((v) => v + 1);
     } catch (err) {
-      if (err instanceof SessionExpiredError) {
-        onSessionExpired();
+      if (err instanceof DeviceBlockedError) {
+        onSessionExpired('blocked');
+      } else if (err instanceof SessionExpiredError) {
+        onSessionExpired('expired');
       } else {
         console.warn('[presence] tracking cycle failed:', err);
       }

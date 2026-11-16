@@ -37,10 +37,33 @@ if (serverUrl === DEFAULT_SERVER_URL) {
 export class NetworkError extends Error {}
 /** Tokens are no longer valid; the employee must sign in again. */
 export class SessionExpiredError extends Error {}
+/** Admin blocked this workstation — force sign-out. */
+export class DeviceBlockedError extends Error {}
 /** The server answered with an error status. */
 export class HttpError extends Error {
   constructor(message: string, public readonly status: number) {
     super(message);
+  }
+}
+
+function isDeviceBlockedMessage(message: string): boolean {
+  return /device has been blocked|device is blocked|blocked by an administrator/i.test(message);
+}
+
+function currentDeviceIdentifier(): string | null {
+  try {
+    return localStorage.getItem('__device_hardware_id') || localStorage.getItem('__device_id');
+  } catch {
+    return null;
+  }
+}
+
+export function rememberDeviceIdentifier(deviceId: string | null | undefined): void {
+  if (!deviceId) return;
+  try {
+    localStorage.setItem('__device_hardware_id', deviceId);
+  } catch {
+    // ignore storage failures
   }
 }
 
@@ -77,6 +100,8 @@ async function send(endpoint: string, options: RequestInit, token: string | null
     'X-Client-Type': 'desktop',
     ...(options.headers as Record<string, string>),
   };
+  const deviceId = currentDeviceIdentifier();
+  if (deviceId) headers['X-Device-Identifier'] = deviceId;
   if (token) headers['Authorization'] = `Bearer ${token}`;
   try {
     return await fetch(url(endpoint), { ...options, headers, signal: AbortSignal.timeout(15000) });
@@ -89,7 +114,13 @@ async function refreshAccessToken(): Promise<string | null> {
   const refreshToken = await getSecureToken('refresh_token');
   if (!refreshToken) return null;
   const res = await send('/auth/refresh', { method: 'POST', body: JSON.stringify({ refresh_token: refreshToken }) }, null);
-  if (!res.ok) return null;
+  if (!res.ok) {
+    const message = await readError(res);
+    if (isDeviceBlockedMessage(message)) {
+      throw new DeviceBlockedError(message || 'This device has been blocked by an administrator.');
+    }
+    return null;
+  }
   const data = await res.json();
   await saveSecureToken('access_token', data.access_token);
   if (data.refresh_token) await saveSecureToken('refresh_token', data.refresh_token);
@@ -99,12 +130,28 @@ async function refreshAccessToken(): Promise<string | null> {
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   let res = await send(endpoint, options, await getSecureToken('access_token'));
   if (res.status === 401) {
+    const message = await readError(res.clone());
+    if (isDeviceBlockedMessage(message)) {
+      throw new DeviceBlockedError(message || 'This device has been blocked by an administrator.');
+    }
     const newToken = await refreshAccessToken();
     if (!newToken) throw new SessionExpiredError('Your session has expired. Please sign in again.');
     res = await send(endpoint, options, newToken);
-    if (res.status === 401) throw new SessionExpiredError('Your session has expired. Please sign in again.');
+    if (res.status === 401) {
+      const retryMessage = await readError(res);
+      if (isDeviceBlockedMessage(retryMessage)) {
+        throw new DeviceBlockedError(retryMessage || 'This device has been blocked by an administrator.');
+      }
+      throw new SessionExpiredError('Your session has expired. Please sign in again.');
+    }
   }
-  if (!res.ok) throw new HttpError(await readError(res), res.status);
+  if (!res.ok) {
+    const message = await readError(res);
+    if ((res.status === 403 || res.status === 401) && isDeviceBlockedMessage(message)) {
+      throw new DeviceBlockedError(message || 'This device has been blocked by an administrator.');
+    }
+    throw new HttpError(message, res.status);
+  }
   return (await res.json()) as T;
 }
 
@@ -149,7 +196,13 @@ export async function loginUser(email: string, password: string, device: DeviceI
     },
     null
   );
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) {
+    const message = await readError(res);
+    if (res.status === 403 && isDeviceBlockedMessage(message)) {
+      throw new DeviceBlockedError(message);
+    }
+    throw new Error(message);
+  }
 
   const data = await res.json();
   if (String(data.user?.role || '').toUpperCase() !== 'EMPLOYEE') {
@@ -160,6 +213,7 @@ export async function loginUser(email: string, password: string, device: DeviceI
   await saveSecureToken('refresh_token', data.refresh_token);
   localStorage.setItem('__device_id', data.device_id || '');
   localStorage.setItem('__employee_id', data.employee_id || '');
+  rememberDeviceIdentifier(device.device_id);
 
   let profile: EmployeeProfileInfo | null = null;
   try {
