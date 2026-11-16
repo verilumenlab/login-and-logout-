@@ -107,6 +107,10 @@ class EmployeeResponse(BaseModel):
     temporary_password: str | None = None
     credentials_email_sent: bool | None = None
     credentials_email_error: str | None = None
+    # Admin-only: last password assigned by an administrator (not available after employee self-reset).
+    admin_visible_password: str | None = None
+    admin_password_updated_at: datetime | None = None
+    has_admin_password: bool = False
 
 
 class EmployeePagination(BaseModel):

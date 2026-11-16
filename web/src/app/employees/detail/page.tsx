@@ -129,6 +129,7 @@ export default function EmployeeDetailsPage() {
       setResetPassword('');
       setResetNotify(true);
       setSuccessMsg('Password reset successfully. Active sessions were revoked.');
+      fetchEmployeeData();
     } catch (err: any) {
       setError(err.message || 'Failed to reset password');
     } finally {
@@ -604,6 +605,27 @@ export default function EmployeeDetailsPage() {
               Security & Audit Trail
             </h2>
             <div className="space-y-3 text-sm">
+              {myRole === 'ADMIN' && (
+                <div>
+                  <span className="text-xs text-slate-400 block">Admin-assigned password</span>
+                  {employee.admin_visible_password ? (
+                    <div className="mt-1 space-y-1">
+                      <code className="font-mono text-sm font-semibold text-blue-700 bg-blue-50 border border-blue-100 px-2.5 py-1.5 rounded-lg block break-all">
+                        {employee.admin_visible_password}
+                      </code>
+                      {employee.admin_password_updated_at && (
+                        <span className="text-[11px] text-slate-400">
+                          Updated {new Date(employee.admin_password_updated_at).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="font-medium text-slate-500 block mt-0.5 text-xs">
+                      No admin-assigned password on file. Use Reset Password to set one you can view later.
+                    </span>
+                  )}
+                </div>
+              )}
               <div>
                 <span className="text-xs text-slate-400 block">Personnel Record Created</span>
                 <span className="font-medium text-slate-700 block mt-0.5">

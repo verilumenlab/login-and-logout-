@@ -965,8 +965,11 @@ async def reset_password(
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User account not found.")
 
-    # Update password using Argon2id
+    # Update password using Argon2id; clear admin-visible copy (employee chose a new secret).
+    from app.core.security import clear_admin_visible_password
+
     user.hashed_password = get_password_hash(payload.new_password)
+    clear_admin_visible_password(user)
     user.failed_login_attempts = 0
     user.locked_until = None
     reset_record.is_used = True

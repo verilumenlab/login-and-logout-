@@ -25,7 +25,7 @@ from app.core.dependencies import (
     require_role,
 )
 from app.core.file_security import sanitize_filename, validate_file_content
-from app.core.security import get_password_hash
+from app.core.security import decrypt_admin_password, get_password_hash, store_admin_visible_password
 from app.models.auth import AuditLog, RefreshToken, Role, User
 from app.models.department import Department
 from app.models.employee import EmployeeProfile, EmploymentStatus, ManagerAssignment
@@ -128,7 +128,19 @@ async def _require_assignable_person(
     return person
 
 
-async def _resolve_employee_response(emp: EmployeeProfile, db: AsyncSession) -> EmployeeResponse:
+def _actor_is_admin(current_user: User) -> bool:
+    if current_user.is_superuser:
+        return True
+    role = (current_user.role.name if current_user.role else "").strip().lower()
+    return role in {"admin", "administrator", "super admin", "super administrator"}
+
+
+async def _resolve_employee_response(
+    emp: EmployeeProfile,
+    db: AsyncSession,
+    *,
+    include_admin_password: bool = False,
+) -> EmployeeResponse:
     """Helper to transform EmployeeProfile ORM instance into full EmployeeResponse."""
     full_name = f"{emp.first_name} {emp.last_name}".strip()
 
@@ -202,6 +214,15 @@ async def _resolve_employee_response(emp: EmployeeProfile, db: AsyncSession) -> 
     if emp.user and emp.user.role_id:
         role_name = await db.scalar(select(Role.name).where(Role.id == emp.user.role_id))
 
+    admin_visible_password = None
+    admin_password_updated_at = None
+    has_admin_password = False
+    if emp.user and getattr(emp.user, "admin_password_encrypted", None):
+        has_admin_password = True
+        admin_password_updated_at = emp.user.admin_password_updated_at
+        if include_admin_password:
+            admin_visible_password = decrypt_admin_password(emp.user.admin_password_encrypted)
+
     return EmployeeResponse(
         id=emp.id,
         user_id=emp.user_id,
@@ -227,6 +248,9 @@ async def _resolve_employee_response(emp: EmployeeProfile, db: AsyncSession) -> 
         metadata_json=emp.metadata_json,
         created_at=emp.created_at,
         updated_at=emp.updated_at,
+        admin_visible_password=admin_visible_password,
+        admin_password_updated_at=admin_password_updated_at,
+        has_admin_password=has_admin_password,
     )
 
 
@@ -318,9 +342,10 @@ async def list_employees(
     paged_query = base_query.order_by(desc(EmployeeProfile.created_at)).offset(offset).limit(page_size)
     records = (await db.execute(paged_query)).scalars().all()
 
+    show_passwords = _actor_is_admin(current_user)
     items: list[EmployeeResponse] = []
     for emp in records:
-        items.append(await _resolve_employee_response(emp, db))
+        items.append(await _resolve_employee_response(emp, db, include_admin_password=show_passwords))
 
     total_pages = (total + page_size - 1) // page_size if page_size > 0 else 0
 
@@ -428,7 +453,7 @@ async def create_employee(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Default role not configured."
             )
 
-    # 8. Create User Account (Argon2id password)
+    # 8. Create User Account (Argon2id password + admin-visible encrypted copy)
     raw_password = (payload.initial_password or "").strip() or _temporary_password()
     user = User(
         organization_id=current_user.organization_id,
@@ -437,6 +462,7 @@ async def create_employee(
         role_id=role.id,
         is_active=True,
     )
+    store_admin_visible_password(user, raw_password)
     db.add(user)
     await db.flush()
 
@@ -571,7 +597,9 @@ async def get_employee_details(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
     _ensure_can_view_employee(current_user, emp)
 
-    return await _resolve_employee_response(emp, db)
+    return await _resolve_employee_response(
+        emp, db, include_admin_password=_actor_is_admin(current_user)
+    )
 
 
 @router.put("/{employee_id}", response_model=EmployeeResponse)
@@ -1083,6 +1111,7 @@ async def import_employees(
             role_id=emp_role.id,
             is_active=True,
         )
+        store_admin_visible_password(new_user, temporary_password)
         db.add(new_user)
         await db.flush()
 
@@ -1212,9 +1241,14 @@ async def reset_employee_password(
             detail="Employee account not found in this organization.",
         )
 
-    # Generate new temporary password
-    temp_pwd = (payload.temporary_password.strip() if payload and payload.temporary_password else f"Reset@{secrets.token_hex(4)}A1!")
+    # Generate new temporary password (also stored encrypted for admin viewing)
+    temp_pwd = (
+        payload.temporary_password.strip()
+        if payload and payload.temporary_password
+        else f"Reset@{secrets.token_hex(4)}A1!"
+    )
     emp.user.hashed_password = get_password_hash(temp_pwd)
+    store_admin_visible_password(emp.user, temp_pwd)
 
     # Invalidate active refresh tokens
     await db.execute(

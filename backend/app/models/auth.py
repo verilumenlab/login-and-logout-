@@ -91,6 +91,10 @@ class User(Base, UUIDMixin, TenantMixin, TimestampMixin):
 
     email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Last password assigned by an administrator (Fernet-encrypted). Cleared if the employee
+    # changes their own password via self-service reset — login still uses hashed_password only.
+    admin_password_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    admin_password_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     role_id: Mapped[uuid.UUID] = mapped_column(
         sa.UUID(as_uuid=True),
         ForeignKey("roles.id", ondelete="RESTRICT"),

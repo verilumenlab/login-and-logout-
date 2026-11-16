@@ -20,6 +20,9 @@ import {
   KeyRound,
   Loader2,
   Trash2,
+  Eye,
+  EyeOff,
+  Copy,
 } from 'lucide-react';
 import {
   apiClient,
@@ -77,6 +80,7 @@ export default function EmployeesPage() {
     message: string;
     full_name?: string;
   } | null>(null);
+  const [revealedPasswords, setRevealedPasswords] = useState<Record<string, boolean>>({});
   const [actionLoading, setActionLoading] = useState(false);
 
   // Form State
@@ -208,9 +212,11 @@ export default function EmployeesPage() {
         message: res.message,
         full_name: resetTarget.full_name,
       });
+      setRevealedPasswords((prev) => ({ ...prev, [resetTarget.id]: true }));
       setResetTarget(null);
       setResetPassword('');
       setResetNotify(true);
+      fetchEmployees();
     } catch (err: any) {
       setError(err.message || 'Failed to reset password');
     } finally {
@@ -410,6 +416,7 @@ export default function EmployeesPage() {
                   <th className="px-6 py-3">Code / ID</th>
                   <th className="px-6 py-3">Role</th>
                   <th className="px-6 py-3">Department</th>
+                  {myRole === 'ADMIN' && <th className="px-6 py-3">Password</th>}
                   <th className="px-6 py-3">Reporting Line</th>
                   <th className="px-6 py-3">Joining Date</th>
                   <th className="px-6 py-3">Account Status</th>
@@ -463,6 +470,55 @@ export default function EmployeesPage() {
                         <span className="text-xs text-slate-400 italic">Unassigned</span>
                       )}
                     </td>
+                    {myRole === 'ADMIN' && (
+                      <td className="px-6 py-4">
+                        {emp.admin_visible_password ? (
+                          <div className="flex items-center gap-1.5">
+                            <code className="text-xs font-mono bg-slate-100 text-slate-800 px-2 py-1 rounded max-w-[140px] truncate">
+                              {revealedPasswords[emp.id] ? emp.admin_visible_password : '••••••••'}
+                            </code>
+                            <button
+                              type="button"
+                              title={revealedPasswords[emp.id] ? 'Hide password' : 'Show password'}
+                              onClick={() =>
+                                setRevealedPasswords((prev) => ({ ...prev, [emp.id]: !prev[emp.id] }))
+                              }
+                              className="p-1 rounded text-slate-500 hover:text-slate-800 hover:bg-slate-100"
+                            >
+                              {revealedPasswords[emp.id] ? (
+                                <EyeOff className="w-3.5 h-3.5" />
+                              ) : (
+                                <Eye className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              title="Copy password"
+                              onClick={() => {
+                                void navigator.clipboard.writeText(emp.admin_visible_password || '');
+                              }}
+                              className="p-1 rounded text-slate-500 hover:text-blue-700 hover:bg-blue-50"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : emp.has_admin_password ? (
+                          <span className="text-[11px] text-slate-400 italic">Stored — refresh list</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setResetPassword('');
+                              setResetNotify(true);
+                              setResetTarget(emp);
+                            }}
+                            className="text-[11px] font-semibold text-amber-700 hover:underline"
+                          >
+                            Set password
+                          </button>
+                        )}
+                      </td>
+                    )}
                     <td className="px-6 py-4">
                       {emp.manager ? (
                         <div className="text-xs text-slate-700">

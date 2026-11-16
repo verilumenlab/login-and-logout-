@@ -110,6 +110,10 @@ export interface Employee {
   temporary_password?: string | null;
   credentials_email_sent?: boolean | null;
   credentials_email_error?: string | null;
+  /** Admin-only: last password assigned by an administrator. */
+  admin_visible_password?: string | null;
+  admin_password_updated_at?: string | null;
+  has_admin_password?: boolean;
   employment_status: 'ACTIVE' | 'ON_LEAVE' | 'PROBATION' | 'TERMINATED';
   is_active: boolean;
   role_name?: string | null;

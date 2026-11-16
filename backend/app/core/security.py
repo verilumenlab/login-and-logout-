@@ -97,3 +97,44 @@ def generate_otp_code(length: int = 6) -> str:
     """Generate cryptographically secure numeric OTP."""
     digits = string.digits
     return "".join(secrets.choice(digits) for _ in range(length))
+
+
+def _admin_password_fernet():
+    """Derive a Fernet key from SECRET_KEY for admin-visible password storage."""
+    from cryptography.fernet import Fernet
+
+    digest = hashlib.sha256(settings.SECRET_KEY.encode("utf-8")).digest()
+    # url-safe base64 32-byte key
+    import base64
+
+    key = base64.urlsafe_b64encode(digest)
+    return Fernet(key)
+
+
+def encrypt_admin_password(plain_password: str) -> str:
+    """Encrypt a password so admins can later view the last password they assigned."""
+    return _admin_password_fernet().encrypt(plain_password.encode("utf-8")).decode("utf-8")
+
+
+def decrypt_admin_password(cipher_text: str | None) -> str | None:
+    """Decrypt an admin-visible password; returns None if missing or corrupt."""
+    if not cipher_text:
+        return None
+    try:
+        return _admin_password_fernet().decrypt(cipher_text.encode("utf-8")).decode("utf-8")
+    except Exception:
+        return None
+
+
+def store_admin_visible_password(user: Any, plain_password: str) -> None:
+    """Persist the admin-assigned password (encrypted) alongside the Argon2 login hash."""
+    from datetime import UTC, datetime
+
+    user.admin_password_encrypted = encrypt_admin_password(plain_password)
+    user.admin_password_updated_at = datetime.now(UTC)
+
+
+def clear_admin_visible_password(user: Any) -> None:
+    """Clear admin-visible password after the employee changes it themselves."""
+    user.admin_password_encrypted = None
+    user.admin_password_updated_at = None
