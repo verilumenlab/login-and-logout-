@@ -152,6 +152,30 @@ def _describe(event: PresenceEventIn) -> str:
     return f"{label} ({event.ssid})" if event.ssid else label
 
 
+def _wifi_display_from_events(events: list[PresenceEvent]) -> tuple[datetime | None, list[str]]:
+    """
+    Prefer real WIFI_CONNECTED rows. If the laptop was already on Wi-Fi and never
+    emitted a connect today, fall back to APP_LOGIN.ssid so the board is not blank.
+    """
+    connects = [e for e in events if e.event_type == PresenceEventType.WIFI_CONNECTED.value]
+    if connects:
+        return (
+            ensure_utc(connects[0].occurred_at),
+            list(dict.fromkeys(e.ssid for e in connects if e.ssid)),
+        )
+    logins_with_ssid = [
+        e
+        for e in events
+        if e.event_type == PresenceEventType.APP_LOGIN.value and e.ssid
+    ]
+    if logins_with_ssid:
+        return (
+            ensure_utc(logins_with_ssid[0].occurred_at),
+            list(dict.fromkeys(e.ssid for e in logins_with_ssid if e.ssid)),
+        )
+    return None, []
+
+
 async def record_presence_event(
     db: AsyncSession,
     employee: EmployeeProfile,
@@ -329,10 +353,9 @@ async def get_presence_days(
             ],
         )
 
-        wifi_connects = [e for e in day_events if e.event_type == PresenceEventType.WIFI_CONNECTED.value]
-        if wifi_connects:
-            row.first_wifi_connected_at = ensure_utc(wifi_connects[0].occurred_at)
-            row.wifi_networks = list(dict.fromkeys(e.ssid for e in wifi_connects if e.ssid))
+        wifi_at, wifi_names = _wifi_display_from_events(day_events)
+        row.first_wifi_connected_at = wifi_at
+        row.wifi_networks = wifi_names
 
         if att is not None and att.shift_start is not None:
             ordered = sorted(att.events, key=lambda e: ensure_utc(e.timestamp) or now)
@@ -443,10 +466,9 @@ async def get_team_presence(
         emp_signals = signals_by_emp.get(emp.id, [])
         if emp_signals:
             row.last_signal_at = ensure_utc(emp_signals[-1].occurred_at)
-            connects = [s for s in emp_signals if s.event_type == PresenceEventType.WIFI_CONNECTED.value]
-            if connects:
-                row.first_wifi_connected_at = ensure_utc(connects[0].occurred_at)
-                row.wifi_networks = list(dict.fromkeys(s.ssid for s in connects if s.ssid))
+            wifi_at, wifi_names = _wifi_display_from_events(emp_signals)
+            row.first_wifi_connected_at = wifi_at
+            row.wifi_networks = wifi_names
 
         att = att_by_emp.get(emp.id)
         if att is not None and att.shift_start is not None:

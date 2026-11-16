@@ -130,6 +130,41 @@ export async function collectWifiEvents(deviceId: string, osType: string): Promi
     );
     const latest = events.reduce<string | null>((max, e) => (!max || e.occurred_at > max ? e.occurred_at : max), null);
     if (latest) localStorage.setItem(WIFI_CURSOR_KEY, latest);
+
+    // WLAN log only records new associations. If Wi-Fi was already connected
+    // (no 8001 today), synthesize a connect from the live interface so the
+    // Login & Logout board still shows the SSID — same as non-Windows.
+    const current = await getConnectedWifiInfo();
+    let previous: { connected: boolean; ssid: string } | null = null;
+    try {
+      previous = JSON.parse(localStorage.getItem(WIFI_POLL_STATE_KEY) || 'null');
+    } catch {
+      previous = null;
+    }
+    const now = new Date();
+    const networkChanged = previous?.connected && (!current.is_wifi || current.ssid !== previous.ssid);
+    const changes: PresenceEventIn[] = [];
+    if (networkChanged && previous) {
+      changes.push({
+        client_event_id: `poll:${tag}:d:${now.getTime()}`,
+        event_type: 'WIFI_DISCONNECTED',
+        occurred_at: now.toISOString(),
+        ssid: previous.ssid || null,
+        device_id: deviceId,
+      });
+    }
+    if (current.is_wifi && (!previous?.connected || networkChanged)) {
+      changes.push({
+        client_event_id: `poll:${tag}:c:${now.getTime()}`,
+        event_type: 'WIFI_CONNECTED',
+        occurred_at: new Date(now.getTime() + 1).toISOString(),
+        ssid: current.ssid || null,
+        bssid: current.bssid || null,
+        device_id: deviceId,
+      });
+    }
+    enqueue(changes);
+    localStorage.setItem(WIFI_POLL_STATE_KEY, JSON.stringify({ connected: current.is_wifi, ssid: current.ssid }));
     return;
   }
 
