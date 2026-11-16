@@ -19,6 +19,7 @@ import {
   Save,
   AlertCircle,
   Loader2,
+  KeyRound,
 } from 'lucide-react';
 import { apiClient, ASSIGNABLE_ROLES, Department, Employee, EmployeeUpdate, roleLabel } from '@/lib/api-client';
 import { useRole } from '@/components/RoleContext';
@@ -45,6 +46,12 @@ export default function EmployeeDetailsPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<EmployeeUpdate>({});
   const [actionLoading, setActionLoading] = useState(false);
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [resetPassword, setResetPassword] = useState('');
+  const [resetNotify, setResetNotify] = useState(true);
+  const [resetResult, setResetResult] = useState<{ email: string; temporary_password: string; message: string } | null>(
+    null
+  );
 
   const fetchEmployeeData = async () => {
     if (!employeeId) return;
@@ -99,6 +106,33 @@ export default function EmployeeDetailsPage() {
       } finally {
         setActionLoading(false);
       }
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!employee) return;
+    setActionLoading(true);
+    setError(null);
+    try {
+      const res = await apiClient.resetEmployeePassword(
+        employee.id,
+        resetPassword.trim() || undefined,
+        resetNotify
+      );
+      setResetResult({
+        email: res.email,
+        temporary_password: res.temporary_password,
+        message: res.message,
+      });
+      setShowResetModal(false);
+      setResetPassword('');
+      setResetNotify(true);
+      setSuccessMsg('Password reset successfully. Active sessions were revoked.');
+    } catch (err: any) {
+      setError(err.message || 'Failed to reset password');
+    } finally {
+      setActionLoading(false);
     }
   };
 
@@ -169,7 +203,21 @@ export default function EmployeeDetailsPage() {
           <ArrowLeft className="w-4 h-4" />
           Back to Employees
         </Link>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          {myRole === 'ADMIN' && (
+            <button
+              onClick={() => {
+                setResetPassword('');
+                setResetNotify(true);
+                setShowResetModal(true);
+              }}
+              disabled={actionLoading}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-amber-300 text-amber-800 hover:bg-amber-50 transition"
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              Reset Password
+            </button>
+          )}
           <button
             onClick={handleToggleStatus}
             disabled={actionLoading}
@@ -179,7 +227,7 @@ export default function EmployeeDetailsPage() {
                 : 'border-emerald-300 text-emerald-700 hover:bg-emerald-50'
             }`}
           >
-            {employee.is_active ? 'Deactivate Account' : 'Activate Account'}
+            {employee.is_active ? 'Deactivate Account' : 'Activate / Resume Account'}
           </button>
           {!isEditing ? (
             <button
@@ -578,6 +626,92 @@ export default function EmployeeDetailsPage() {
                   )}
                   {employee.is_active ? 'Credentials Enabled' : 'Sessions Terminated / Access Blocked'}
                 </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showResetModal && employee && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full border border-slate-200">
+            <div className="px-6 py-4 border-b border-slate-200">
+              <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <KeyRound className="w-5 h-5 text-amber-600" />
+                Reset password
+              </h2>
+              <p className="text-xs text-slate-500 mt-1">
+                Set a new password for {employee.full_name}. Active sessions will be revoked.
+              </p>
+            </div>
+            <form onSubmit={handleResetPassword} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">New password (optional)</label>
+                <input
+                  type="text"
+                  minLength={8}
+                  placeholder="Leave blank to auto-generate"
+                  value={resetPassword}
+                  onChange={(e) => setResetPassword(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg font-mono"
+                />
+              </div>
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={resetNotify}
+                  onChange={(e) => setResetNotify(e.target.checked)}
+                />
+                Email the employee about this reset
+              </label>
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button type="button" onClick={() => setShowResetModal(false)} className="px-4 py-2 text-sm text-slate-600">
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading || (resetPassword.trim().length > 0 && resetPassword.trim().length < 8)}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2"
+                >
+                  {actionLoading && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Reset password
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {resetResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full border border-slate-200">
+            <div className="px-6 py-4 border-b border-slate-200">
+              <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                Password reset
+              </h2>
+              <p className="text-xs text-slate-500 mt-1">{resetResult.message}</p>
+            </div>
+            <div className="p-6 space-y-3 text-sm">
+              <div className="rounded-lg border border-slate-200 p-3 space-y-2 font-mono text-xs">
+                <div>
+                  <span className="text-slate-500">User ID (email)</span>
+                  <div className="font-semibold break-all">{resetResult.email}</div>
+                </div>
+                <div>
+                  <span className="text-slate-500">New password</span>
+                  <div className="font-semibold text-blue-700 break-all">{resetResult.temporary_password}</div>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500">Copy this password now — it is shown only once.</p>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setResetResult(null)}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium"
+                >
+                  Done
+                </button>
               </div>
             </div>
           </div>

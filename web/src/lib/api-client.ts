@@ -199,8 +199,9 @@ export interface OfficeNetwork {
   id: string;
   name: string;
   ssid?: string | null;
-  bssid?: string | null;
-  public_ip?: string | null;
+  bssid_mac?: string | null;
+  ip_address?: string | null;
+  subnet_cidr?: string | null;
   is_active: boolean;
 }
 
@@ -218,6 +219,13 @@ export interface Office {
   updated_at: string;
 }
 
+export interface OfficeListResponse {
+  items: Office[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 export interface Device {
   id: string;
   device_identifier: string;
@@ -231,6 +239,11 @@ export interface Device {
   is_blocked: boolean;
   registered_at: string;
   last_seen_at?: string | null;
+  last_ip_address?: string | null;
+  employee_id?: string | null;
+  employee_name?: string | null;
+  employee_code?: string | null;
+  employee_email?: string | null;
 }
 
 export interface ReleaseFile {
@@ -498,6 +511,8 @@ export interface PresenceDay {
   last_logout: string | null;
   is_logged_in: boolean;
   worked_minutes: number;
+  break_count?: number;
+  total_break_minutes?: number;
   status: string | null;
   first_wifi_connected_at: string | null;
   wifi_networks: string[];
@@ -859,10 +874,28 @@ export class ApiClient {
 
   // --- Offices ---
   async listOffices(): Promise<Office[]> {
-    return this.request<Office[]>('/offices');
+    const res = await this.request<OfficeListResponse | Office[]>('/offices');
+    if (Array.isArray(res)) return res;
+    return res?.items ?? [];
   }
 
-  async createOffice(data: { name: string; code: string; address: string; timezone: string }): Promise<Office> {
+  async createOffice(data: {
+    name: string;
+    code: string;
+    address: string;
+    timezone: string;
+    latitude?: number | null;
+    longitude?: number | null;
+    radius_meters?: number | null;
+    networks?: Array<{
+      name: string;
+      ssid?: string | null;
+      ip_address?: string | null;
+      bssid_mac?: string | null;
+      subnet_cidr?: string | null;
+      is_active?: boolean;
+    }>;
+  }): Promise<Office> {
     return this.request<Office>('/offices', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -876,11 +909,30 @@ export class ApiClient {
     });
   }
 
-  async addNetwork(officeId: string, data: { name: string; ssid?: string; public_ip?: string }): Promise<OfficeNetwork> {
+  async addNetwork(officeId: string, data: {
+    name: string;
+    ssid?: string | null;
+    ip_address?: string | null;
+    bssid_mac?: string | null;
+    subnet_cidr?: string | null;
+    is_active?: boolean;
+  }): Promise<OfficeNetwork> {
     return this.request<OfficeNetwork>(`/offices/${officeId}/networks`, {
       method: 'POST',
       body: JSON.stringify(data),
     });
+  }
+
+  async deleteNetwork(officeId: string, networkId: string): Promise<void> {
+    await this.request(`/offices/${officeId}/networks/${networkId}`, { method: 'DELETE' });
+  }
+
+  async deleteGeofence(officeId: string, geofenceId: string): Promise<void> {
+    await this.request(`/offices/${officeId}/geofences/${geofenceId}`, { method: 'DELETE' });
+  }
+
+  async deleteOffice(officeId: string): Promise<void> {
+    await this.request(`/offices/${officeId}`, { method: 'DELETE' });
   }
 
   // --- Devices ---
@@ -950,6 +1002,60 @@ export class ApiClient {
 
   async listReleaseEvents(limit: number = 50): Promise<UpdateEvent[]> {
     return this.request<UpdateEvent[]>(`/releases/events?limit=${limit}`);
+  }
+
+  /** Download a stored release package (any status — archive / old versions). */
+  async downloadReleaseFile(releaseId: string, fileId: string, filename?: string): Promise<void> {
+    const endpoint = `/releases/${releaseId}/files/${fileId}/download`;
+    let response = await this.send(endpoint, { method: 'GET' });
+    if (response.status === 401 && this.getToken()) {
+      if (await this.refreshAccessToken()) {
+        response = await this.send(endpoint, { method: 'GET' });
+      }
+      if (response.status === 401) {
+        this.clearSession();
+        this.sessionExpiredHandler?.();
+        throw new ApiError('Your session has expired. Please sign in again.', 401);
+      }
+    }
+    if (!response.ok) {
+      let message = `Download failed (${response.status})`;
+      try {
+        const err = await response.json();
+        message = err.detail || err.message || message;
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(message, response.status);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || 'WorkPulse-Employee-Setup.exe';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async resetEmployeePassword(
+    employeeId: string,
+    temporaryPassword?: string,
+    notifyEmail: boolean = true
+  ): Promise<{
+    status: string;
+    message: string;
+    temporary_password: string;
+    email: string;
+  }> {
+    return this.request(`/employees/${employeeId}/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify({
+        temporary_password: temporaryPassword?.trim() || null,
+        notify_email: notifyEmail,
+      }),
+    });
   }
 
   // --- Attendance ---
@@ -1072,13 +1178,6 @@ export class ApiClient {
         end_date: endDate,
         recipients,
       }),
-    });
-  }
-
-  async resetEmployeePassword(employeeId: string, temporaryPassword?: string): Promise<any> {
-    return this.request(`/employees/${employeeId}/reset-password`, {
-      method: 'POST',
-      body: JSON.stringify({ temporary_password: temporaryPassword || null }),
     });
   }
 

@@ -21,6 +21,13 @@ export type UpdateStatusPayload = {
   message?: string;
 };
 
+export type BreakAwaySignal = 'LOCK' | 'UNLOCK' | 'SUSPEND' | 'RESUME';
+
+export type BreakAwayPayload = {
+  signal: BreakAwaySignal;
+  occurred_at: string;
+};
+
 type WorkpulseBridge = {
   platform: 'electron';
   saveSecureToken: (key: string, value: string) => Promise<void>;
@@ -32,7 +39,9 @@ type WorkpulseBridge = {
   setPresenceSession: (session: PresenceSession) => Promise<void>;
   drainPowerEvents: () => Promise<PresenceEventIn[]>;
   peekPowerEvents: () => Promise<PresenceEventIn[]>;
+  getSystemIdleSeconds?: () => Promise<number>;
   onPowerEventQueued: (callback: (event: PresenceEventIn) => void) => () => void;
+  onBreakAwayQueued?: (callback: (event: BreakAwayPayload) => void) => () => void;
   checkForUpdates?: () => Promise<unknown>;
   installUpdateNow?: () => Promise<{ ok: boolean; error?: string }>;
   getAppVersion?: () => Promise<string>;
@@ -127,7 +136,7 @@ export async function getNativeDeviceInfo(): Promise<DeviceInfo> {
     is_charging: null,
     enrolled: false,
     last_heartbeat: null,
-    agent_version: '0.1.0',
+    agent_version: '0.2.4',
   };
 }
 
@@ -179,6 +188,23 @@ export function onPowerEventQueued(callback: (event: PresenceEventIn) => void): 
   const wp = bridge();
   if (!wp?.onPowerEventQueued) return () => undefined;
   return wp.onPowerEventQueued(callback);
+}
+
+export async function getSystemIdleSeconds(): Promise<number> {
+  const wp = bridge();
+  if (!wp?.getSystemIdleSeconds) return 0;
+  try {
+    return Math.max(0, Math.floor(Number(await wp.getSystemIdleSeconds()) || 0));
+  } catch (e) {
+    console.warn('[IPC] getSystemIdleSeconds failed:', e);
+    return 0;
+  }
+}
+
+export function onBreakAwayQueued(callback: (event: BreakAwayPayload) => void): () => void {
+  const wp = bridge();
+  if (!wp?.onBreakAwayQueued) return () => undefined;
+  return wp.onBreakAwayQueued(callback);
 }
 
 export function onUpdateStatus(callback: (payload: UpdateStatusPayload) => void): () => void {

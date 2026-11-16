@@ -9,12 +9,13 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const native = require('./native.cjs');
+const runtimeConfig = require('./runtime-config.cjs');
 
 let checkTimer = null;
 let lastInfo = null;
 let forceUpdate = false;
 let currentDeviceId = null;
-let updateChannel = 'production';
+let updateChannel = runtimeConfig.RELEASE_CHANNEL || 'production';
 
 function readPkgVersion() {
   try {
@@ -27,10 +28,11 @@ function readPkgVersion() {
 }
 
 function apiBase() {
+  const packagedDefault = runtimeConfig.API_BASE_URL || 'https://workpulse-api-pm0x.onrender.com/api/v1';
   return (
     process.env.WORKPULSE_API_BASE_URL ||
     process.env.VITE_API_BASE_URL ||
-    'http://localhost:8000/api/v1'
+    (app.isPackaged ? packagedDefault : 'http://localhost:8000/api/v1')
   ).replace(/\/$/, '');
 }
 
@@ -131,18 +133,17 @@ function wireEvents() {
       state: 'ready',
       version: info.version,
       releaseNotes: info.releaseNotes || null,
-      mandatory: forceUpdate,
+      mandatory: true,
     });
     report('installing', { to_version: info.version }).catch(() => undefined);
-    if (forceUpdate) {
-      setTimeout(() => {
-        try {
-          autoUpdater.quitAndInstall(false, true);
-        } catch (err) {
-          console.warn('[updater] quitAndInstall failed:', err);
-        }
-      }, 1500);
-    }
+    // Replace the installed build automatically (NSIS upgrades in place; old files removed).
+    setTimeout(() => {
+      try {
+        autoUpdater.quitAndInstall(false, true);
+      } catch (err) {
+        console.warn('[updater] quitAndInstall failed:', err);
+      }
+    }, 2000);
   });
 
   autoUpdater.on('error', (err) => {

@@ -301,8 +301,14 @@ async def test_seed_data_execution(db_session: AsyncSession):
     await db_session.flush()
 
     leave_types = await seed_organization_leave_types(db_session, org.id)
-    assert len(leave_types) >= 6
+    assert len(leave_types) == 3
     codes = [lt.code for lt in leave_types]
     assert "ANNUAL" in codes
     assert "SICK" in codes
-    assert "MATERNITY" in codes
+    assert "CASUAL" in codes
+    assert "UNPAID" not in codes
+    assert "MATERNITY" not in codes
+    by_code = {lt.code: lt for lt in leave_types}
+    assert by_code["ANNUAL"].annual_allowance == 24
+    assert by_code["SICK"].annual_allowance == 12
+    assert by_code["CASUAL"].annual_allowance == 12

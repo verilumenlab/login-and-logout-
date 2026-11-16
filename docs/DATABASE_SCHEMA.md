@@ -180,14 +180,9 @@ The database architecture includes an automated seeding module located at [backe
 - **Audit Trails**: `audit:view`, `audit:export`
 
 ### 5.3 Default Leave Types Template
-- **Annual Leave** (`ANNUAL`): Paid = Yes, Allowance = 15 days, Max Carryover = 5 days.
-- **Sick Leave** (`SICK`): Paid = Yes, Allowance = 10 days, Medical note required = Yes.
-- **Casual Leave** (`CASUAL`): Paid = Yes, Allowance = 7 days, Max Carryover = 0 days.
-- **Maternity Leave** (`MATERNITY`): Paid = Yes, Allowance = 180 days, Documentation required = Yes.
-- **Paternity Leave** (`PATERNITY`): Paid = Yes, Allowance = 15 days, Documentation required = Yes.
-- **Bereavement Leave** (`BEREAVEMENT`): Paid = Yes, Allowance = 5 days.
-- **Unpaid Leave** (`UNPAID`): Paid = No, Allowance = 0 days.
-- **Compensatory Off** (`COMP_OFF`): Paid = Yes, Earned overtime credit, Validity = 30 days.
+- **Annual Leave** (`ANNUAL`): Paid = Yes, Allowance = 24 days, Max Carryover = 5 days.
+- **Sick Leave** (`SICK`): Paid = Yes, Allowance = 12 days, Medical note required = Yes.
+- **Casual Leave** (`CASUAL`): Paid = Yes, Allowance = 12 days, Max Carryover = 0 days.
 
 ---
 

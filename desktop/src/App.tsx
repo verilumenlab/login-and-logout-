@@ -3,6 +3,7 @@ import './App.css';
 import { DeviceInfo, ScreenId, UserSession } from './types';
 import { getNativeDeviceInfo, setUpdateContext } from './api/ipc';
 import { clearLocalSession, getStoredUserSession, logoutUser } from './api/backend';
+import { bindBreakQueueToUser } from './attendance/breakTracker';
 import { bindQueueToUser } from './presence/tracker';
 import { usePresenceTracker } from './presence/usePresenceTracker';
 
@@ -16,7 +17,10 @@ import { LeaveScreen } from './screens/LeaveScreen';
 export default function App() {
   const [session, setSession] = useState<UserSession | null>(() => {
     const stored = getStoredUserSession();
-    if (stored) bindQueueToUser(stored.user_id);
+    if (stored) {
+      bindQueueToUser(stored.user_id);
+      bindBreakQueueToUser(stored.user_id);
+    }
     return stored;
   });
   const [device, setDevice] = useState<DeviceInfo | null>(null);
@@ -34,15 +38,12 @@ export default function App() {
     setNotice('Your session expired. Please sign in again — your login times are kept on this laptop.');
   }, []);
 
-  const { status, dataVersion, refresh, recordAppLogout } = usePresenceTracker(
-    device,
-    session !== null,
-    handleSessionExpired,
-    session
-  );
+  const { status, breakStatus, dataVersion, refresh, recordAppLogout, recordWorkLogin, recordWorkLogout } =
+    usePresenceTracker(device, session !== null, handleSessionExpired, session);
 
   const handleLogin = (newSession: UserSession) => {
     bindQueueToUser(newSession.user_id);
+    bindBreakQueueToUser(newSession.user_id);
     setNotice(null);
     setScreen('dashboard');
     setSession(newSession);
@@ -79,9 +80,17 @@ export default function App() {
       />
       <UpdateBanner />
       <main className="app-main">
-        {screen === 'dashboard' && <DashboardScreen session={session} dataVersion={dataVersion} />}
+        {screen === 'dashboard' && (
+          <DashboardScreen
+            session={session}
+            dataVersion={dataVersion}
+            breakStatus={breakStatus}
+            onWorkLogin={recordWorkLogin}
+            onWorkLogout={recordWorkLogout}
+          />
+        )}
         {screen === 'presence' && <PresenceScreen tracker={status} dataVersion={dataVersion} onSyncNow={refresh} />}
-        {screen === 'leave' && <LeaveScreen />}
+        {screen === 'leave' && <LeaveScreen dataVersion={dataVersion} />}
       </main>
     </div>
   );

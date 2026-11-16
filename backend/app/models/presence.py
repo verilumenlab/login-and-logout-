@@ -38,7 +38,6 @@ LOGIN_EVENT_TYPES = frozenset(
     {
         PresenceEventType.APP_LOGIN,
         PresenceEventType.WIFI_CONNECTED,
-        PresenceEventType.SYSTEM_RESUME,
         PresenceEventType.SYSTEM_STARTUP,
     }
 )
@@ -48,7 +47,15 @@ LOGOUT_EVENT_TYPES = frozenset(
         PresenceEventType.APP_LOGOUT,
         PresenceEventType.WIFI_DISCONNECTED,
         PresenceEventType.SYSTEM_SHUTDOWN,
+    }
+)
+
+# Sleep/wake are audited as PresenceEvents but map to AttendanceBreaks (auto sleep),
+# not clock-in/out — otherwise unpaid break minutes would double-count the gap.
+AUDIT_ONLY_PRESENCE_EVENT_TYPES = frozenset(
+    {
         PresenceEventType.SYSTEM_SUSPEND,
+        PresenceEventType.SYSTEM_RESUME,
     }
 )
 

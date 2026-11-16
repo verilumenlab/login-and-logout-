@@ -5,13 +5,14 @@ Initial Seed Data for Roles, Permissions, and Standard Leave Categories
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.auth import Permission, Role, RolePermission
-from app.models.leave import LeaveCategory, LeaveType
+from app.models.leave import LeaveBalance, LeaveCategory, LeaveType
 
 # 1. System Permissions Definitions
 PERMISSIONS_DATA: list[dict[str, str]] = [
@@ -356,7 +357,7 @@ DEFAULT_LEAVE_TYPES_DATA: list[dict[str, Any]] = [
         "code": "ANNUAL",
         "category": LeaveCategory.ANNUAL,
         "is_paid": True,
-        "annual_allowance": 15,
+        "annual_allowance": 24,
         "carryover_max_days": 5,
         "requires_attachment": False,
     },
@@ -365,7 +366,7 @@ DEFAULT_LEAVE_TYPES_DATA: list[dict[str, Any]] = [
         "code": "SICK",
         "category": LeaveCategory.SICK,
         "is_paid": True,
-        "annual_allowance": 10,
+        "annual_allowance": 12,
         "carryover_max_days": 0,
         "requires_attachment": True,
     },
@@ -374,56 +375,16 @@ DEFAULT_LEAVE_TYPES_DATA: list[dict[str, Any]] = [
         "code": "CASUAL",
         "category": LeaveCategory.CASUAL,
         "is_paid": True,
-        "annual_allowance": 7,
+        "annual_allowance": 12,
         "carryover_max_days": 0,
-        "requires_attachment": False,
-    },
-    {
-        "name": "Maternity Leave",
-        "code": "MATERNITY",
-        "category": LeaveCategory.MATERNITY,
-        "is_paid": True,
-        "annual_allowance": 180,
-        "carryover_max_days": 0,
-        "requires_attachment": True,
-    },
-    {
-        "name": "Paternity Leave",
-        "code": "PATERNITY",
-        "category": LeaveCategory.PATERNITY,
-        "is_paid": True,
-        "annual_allowance": 15,
-        "carryover_max_days": 0,
-        "requires_attachment": True,
-    },
-    {
-        "name": "Bereavement Leave",
-        "code": "BEREAVEMENT",
-        "category": LeaveCategory.BEREAVEMENT,
-        "is_paid": True,
-        "annual_allowance": 5,
-        "carryover_max_days": 0,
-        "requires_attachment": False,
-    },
-    {
-        "name": "Unpaid Leave",
-        "code": "UNPAID",
-        "category": LeaveCategory.UNPAID,
-        "is_paid": False,
-        "annual_allowance": 0,
-        "carryover_max_days": 0,
-        "requires_attachment": False,
-    },
-    {
-        "name": "Compensatory Off",
-        "code": "COMP_OFF",
-        "category": LeaveCategory.COMP_OFF,
-        "is_paid": True,
-        "annual_allowance": 0,
-        "carryover_max_days": 30,
         "requires_attachment": False,
     },
 ]
+
+# Soft-deactivate these codes when syncing existing organizations.
+DEPRECATED_LEAVE_TYPE_CODES: frozenset[str] = frozenset(
+    {"MATERNITY", "PATERNITY", "BEREAVEMENT", "COMP_OFF", "UNPAID"}
+)
 
 
 async def seed_permissions(db: AsyncSession) -> dict[str, Permission]:
@@ -487,8 +448,14 @@ async def seed_system_roles(db: AsyncSession, permission_map: dict[str, Permissi
 
 
 async def seed_organization_leave_types(db: AsyncSession, organization_id: uuid.UUID) -> list[LeaveType]:
-    """Populates standard leave categories for a newly created organization."""
+    """Create or sync standard leave categories for an organization.
+
+    - Ensures default types exist with current allowances and are active.
+    - Soft-deactivates deprecated leave type codes.
+    - Updates current-year leave balance allocations when allowances change.
+    """
     leave_types: list[LeaveType] = []
+    current_year = datetime.now(UTC).year
 
     for lt_data in DEFAULT_LEAVE_TYPES_DATA:
         result = await db.execute(
@@ -512,6 +479,41 @@ async def seed_organization_leave_types(db: AsyncSession, organization_id: uuid.
             )
             db.add(lt)
             await db.flush()
+        else:
+            lt.name = lt_data["name"]
+            lt.category = lt_data["category"]
+            lt.is_paid = lt_data["is_paid"]
+            lt.annual_allowance = lt_data["annual_allowance"]
+            lt.carryover_max_days = lt_data["carryover_max_days"]
+            lt.requires_attachment = lt_data["requires_attachment"]
+            lt.is_active = True
+            await db.flush()
+
+        # Keep current-year allocations aligned with policy (Annual 24 / Sick 12 / Casual 12).
+        bal_result = await db.execute(
+            select(LeaveBalance).where(
+                LeaveBalance.leave_type_id == lt.id,
+                LeaveBalance.year == current_year,
+            )
+        )
+        target_allocation = float(lt_data["annual_allowance"])
+        for balance in bal_result.scalars().all():
+            if balance.allocated_days != target_allocation:
+                balance.allocated_days = target_allocation
+        await db.flush()
+
         leave_types.append(lt)
+
+    for code in DEPRECATED_LEAVE_TYPE_CODES:
+        result = await db.execute(
+            select(LeaveType).where(
+                LeaveType.organization_id == organization_id,
+                LeaveType.code == code,
+            )
+        )
+        deprecated = result.scalars().first()
+        if deprecated and deprecated.is_active:
+            deprecated.is_active = False
+            await db.flush()
 
     return leave_types

@@ -30,6 +30,7 @@ from app.core.dependencies import (
     require_role,
 )
 from app.core.file_security import sanitize_filename
+from app.core.seeds import seed_organization_leave_types
 from app.models.auth import User
 from app.models.employee import EmployeeProfile, ManagerAssignment
 from app.models.leave import (
@@ -192,6 +193,9 @@ async def list_leave_types(
     db: AsyncSession = Depends(get_db),
 ) -> list[LeaveType]:
     """Retrieve all available leave categories & policies for the organization."""
+    await seed_organization_leave_types(db, current_user.organization_id)
+    await db.commit()
+
     stmt = (
         select(LeaveType)
         .where(
@@ -240,6 +244,8 @@ async def get_my_leave_balances(
     db: AsyncSession = Depends(get_db),
 ) -> list[LeaveBalanceResponse]:
     """Retrieve the authenticated employee's leave balance entitlements for the current year."""
+    await seed_organization_leave_types(db, current_emp.organization_id)
+
     # Ensure all active leave types have initialized balances
     lt_stmt = select(LeaveType).where(
         LeaveType.organization_id == current_emp.organization_id,
@@ -258,13 +264,15 @@ async def get_my_leave_balances(
         )
     await db.commit()
 
-    # Query all balances for this employee
+    # Query balances for active leave types only
     bal_stmt = (
         select(LeaveBalance)
+        .join(LeaveType, LeaveBalance.leave_type_id == LeaveType.id)
         .options(selectinload(LeaveBalance.leave_type))
         .where(
             LeaveBalance.employee_id == current_emp.id,
             LeaveBalance.year == year,
+            LeaveType.is_active.is_(True),
         )
     )
     bal_res = await db.execute(bal_stmt)

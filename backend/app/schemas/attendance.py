@@ -17,6 +17,7 @@ from app.models.attendance import (
     AttendanceEventType,
     AttendanceSource,
     AttendanceStatus,
+    BreakSource,
     BreakType,
 )
 
@@ -61,6 +62,7 @@ class ClockOutRequest(BaseModel):
 class BreakStartRequest(BaseModel):
     break_type: BreakType = BreakType.LUNCH
     reason: str | None = None
+    source: BreakSource = BreakSource.MANUAL
     client_event_id: str | None = None
     occurred_at: datetime | None = None
 
@@ -96,6 +98,8 @@ class AttendanceBreakResponse(BaseModel):
     duration_minutes: int | None = None
     is_paid: bool
     reason: str | None = None
+    source: str = BreakSource.MANUAL.value
+    client_event_id: str | None = None
 
 
 class AttendanceAdjustmentCreateRequest(BaseModel):
@@ -157,6 +161,7 @@ class OfflineAttendanceItem(BaseModel):
     action: str  # "CLOCK_IN" | "CLOCK_OUT" | "BREAK_START" | "BREAK_END"
     occurred_at: datetime
     break_type: BreakType | None = None
+    source: BreakSource | None = None
     is_wfh: bool = False
     notes: str | None = None
 

@@ -688,6 +688,35 @@ async def get_file_for_download(
     return release, match, path
 
 
+async def get_stored_release_file(
+    db: AsyncSession,
+    *,
+    release_id: uuid.UUID,
+    file_id: uuid.UUID,
+) -> tuple[ApplicationRelease, ApplicationReleaseFile, Path]:
+    """Fetch any stored release package by id (including cancelled / old archive versions)."""
+    release = await get_release(db, release_id)
+    match = next((f for f in (release.files or []) if f.id == file_id), None)
+    if not match:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Release file not found in archive")
+
+    path = Path(match.storage_path)
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Release file missing from storage — package may have been removed from disk",
+        )
+
+    data = path.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != match.sha256:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Package integrity check failed",
+        )
+    return release, match, path
+
+
 async def report_update(
     db: AsyncSession,
     *,

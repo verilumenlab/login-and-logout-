@@ -17,10 +17,21 @@ import {
 import { deleteSecureToken, getSecureToken, saveSecureToken } from './ipc';
 
 const DEFAULT_SERVER_URL =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined) || 'http://localhost:8000/api/v1';
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ||
+  'https://workpulse-api-pm0x.onrender.com/api/v1';
 const SESSION_KEY = '__user_session';
 
-let serverUrl = localStorage.getItem('__backend_server_url') || DEFAULT_SERVER_URL;
+/** Prefer baked production URL; only keep a saved override if it is not localhost. */
+function resolveInitialServerUrl(): string {
+  const saved = localStorage.getItem('__backend_server_url');
+  if (saved && !/localhost|127\.0\.0\.1/i.test(saved)) return saved;
+  return DEFAULT_SERVER_URL;
+}
+
+let serverUrl = resolveInitialServerUrl();
+if (serverUrl === DEFAULT_SERVER_URL) {
+  localStorage.setItem('__backend_server_url', DEFAULT_SERVER_URL);
+}
 
 /** The server could not be reached (offline, DNS, timeout). Safe to retry later. */
 export class NetworkError extends Error {}
@@ -216,6 +227,35 @@ export function getPresenceSummary(month?: string): Promise<PresenceMonthSummary
 export function getPresenceHistory(startDate: string, endDate: string): Promise<PresenceHistory> {
   const qs = new URLSearchParams({ start_date: startDate, end_date: endDate });
   return request<PresenceHistory>(`/presence/my-history?${qs.toString()}`);
+}
+
+// ---------------------------------------------------------------------------
+// Attendance offline sync (auto breaks)
+// ---------------------------------------------------------------------------
+
+export type OfflineAttendanceItem = {
+  client_event_id: string;
+  action: 'CLOCK_IN' | 'CLOCK_OUT' | 'BREAK_START' | 'BREAK_END';
+  occurred_at: string;
+  break_type?: string | null;
+  source?: string | null;
+  is_wfh?: boolean;
+  notes?: string | null;
+};
+
+export type AttendanceOfflineSyncResponse = {
+  received_count: number;
+  inserted_count: number;
+  duplicate_count: number;
+  affected_work_dates: string[];
+  message: string;
+};
+
+export function syncOfflineAttendance(events: OfflineAttendanceItem[]): Promise<AttendanceOfflineSyncResponse> {
+  return request<AttendanceOfflineSyncResponse>('/attendance/sync-offline', {
+    method: 'POST',
+    body: JSON.stringify({ events }),
+  });
 }
 
 // ---------------------------------------------------------------------------

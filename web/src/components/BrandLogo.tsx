@@ -49,7 +49,7 @@ export function BrandLogo({
           alt="WorkPulse"
           width={MARK[size]}
           height={MARK[size]}
-          className="rounded-lg shadow-sm object-contain bg-white"
+          className="rounded-lg shadow-sm object-cover"
           priority
         />
         <span className="text-left">

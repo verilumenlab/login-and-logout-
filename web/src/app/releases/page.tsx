@@ -48,6 +48,7 @@ export default function ApplicationReleasesPage() {
   const [compliance, setCompliance] = useState<DeviceUpdateStatus[]>([]);
   const [events, setEvents] = useState<UpdateEvent[]>([]);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [downloadLoading, setDownloadLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [uploadVersion, setUploadVersion] = useState('');
@@ -98,16 +99,41 @@ export default function ApplicationReleasesPage() {
     }
   };
 
+  const handleDownload = async (release: ApplicationRelease) => {
+    const setup = release.files?.find((f) => f.kind === 'setup') || release.files?.[0];
+    if (!setup) {
+      alert('No stored package file found for this version.');
+      return;
+    }
+    setDownloadLoading(setup.id);
+    try {
+      await apiClient.downloadReleaseFile(release.id, setup.id, setup.filename);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Download failed');
+    } finally {
+      setDownloadLoading(null);
+    }
+  };
+
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!setupFile || !uploadVersion.trim()) {
-      alert('Version and Windows setup .exe are required');
+    const version = uploadVersion.trim().replace(/^v/i, '');
+    if (!version) {
+      alert('Enter version like 0.2.3 (numbers only, no word "version")');
+      return;
+    }
+    if (!/^\d+\.\d+\.\d+$/.test(version)) {
+      alert(`Invalid semver version '${uploadVersion.trim()}'. Expected X.Y.Z`);
+      return;
+    }
+    if (!setupFile) {
+      alert('Please choose the Setup .exe file again (click Browse and select WorkPulse-Employee-Setup-….exe)');
       return;
     }
     setActionLoading('upload');
     try {
       const fd = new FormData();
-      fd.append('version', uploadVersion.trim().replace(/^v/, ''));
+      fd.append('version', version);
       fd.append('channel', uploadChannel);
       if (uploadNotes.trim()) fd.append('release_notes', uploadNotes.trim());
       if (uploadBuild.trim()) fd.append('build_number', uploadBuild.trim());
@@ -239,16 +265,16 @@ export default function ApplicationReleasesPage() {
         </div>
         <div className="flex flex-col md:flex-row gap-3 items-start md:items-center">
           <label className="text-xs text-slate-600">
-            Setup .exe
+            Setup .exe {setupFile ? <span className="text-emerald-600 font-semibold">({setupFile.name})</span> : <span className="text-rose-500">(required)</span>}
             <input
               type="file"
-              accept=".exe"
+              accept=".exe,application/vnd.microsoft.portable-executable"
               onChange={(e) => setSetupFile(e.target.files?.[0] || null)}
               className="block mt-1 text-xs"
             />
           </label>
           <label className="text-xs text-slate-600">
-            Blockmap (optional)
+            Blockmap (optional) {blockmapFile ? <span className="text-emerald-600">({blockmapFile.name})</span> : null}
             <input
               type="file"
               accept=".blockmap"
@@ -314,6 +340,16 @@ export default function ApplicationReleasesPage() {
                   <td className="px-4 py-3 max-w-[200px] truncate text-slate-500">{r.release_notes || '—'}</td>
                   <td className="px-4 py-3">
                     <div className="flex justify-end gap-1 flex-wrap">
+                      {(r.files?.length ?? 0) > 0 && (
+                        <button
+                          onClick={() => handleDownload(r)}
+                          disabled={!!downloadLoading}
+                          className="px-2 py-1 rounded-lg bg-blue-600 text-white font-bold"
+                          title="Download stored package"
+                        >
+                          <Download className={`w-3.5 h-3.5 ${downloadLoading && r.files.some((f) => f.id === downloadLoading) ? 'animate-pulse' : ''}`} />
+                        </button>
+                      )}
                       {r.status === 'uploaded' && (
                         <button
                           onClick={() => runAction(r.id, 'approve')}
@@ -368,6 +404,72 @@ export default function ApplicationReleasesPage() {
                   </td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Version archive / storage — old packages stay downloadable */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800">
+          <h2 className="text-sm font-bold flex items-center gap-2">
+            <Package className="w-4 h-4 text-slate-500" />
+            Version archive storage
+          </h2>
+          <p className="text-[11px] text-slate-400 mt-0.5">
+            All uploaded packages remain on the server. Download any old or cancelled version from this page.
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500">
+              <tr>
+                <th className="text-left px-4 py-2 font-semibold">Version</th>
+                <th className="text-left px-4 py-2 font-semibold">Status</th>
+                <th className="text-left px-4 py-2 font-semibold">Package</th>
+                <th className="text-left px-4 py-2 font-semibold">Size</th>
+                <th className="text-left px-4 py-2 font-semibold">Uploaded</th>
+                <th className="text-right px-4 py-2 font-semibold">Download</th>
+              </tr>
+            </thead>
+            <tbody>
+              {releases.filter((r) => (r.files?.length ?? 0) > 0).length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
+                    No stored packages yet. Upload a release to keep it in the archive.
+                  </td>
+                </tr>
+              )}
+              {releases
+                .filter((r) => (r.files?.length ?? 0) > 0)
+                .map((r) => {
+                  const setup = r.files.find((f) => f.kind === 'setup') || r.files[0];
+                  return (
+                    <tr key={`archive-${r.id}`} className="border-t border-slate-100 dark:border-slate-800">
+                      <td className="px-4 py-3 font-mono font-semibold">{r.version}</td>
+                      <td className="px-4 py-3">
+                        <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${statusBadge(r.status)}`}>
+                          {r.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 font-mono text-slate-600 truncate max-w-[240px]" title={setup?.filename}>
+                        {setup?.filename || '—'}
+                      </td>
+                      <td className="px-4 py-3 font-mono">{formatBytes(setup?.size_bytes || r.package_size)}</td>
+                      <td className="px-4 py-3">{new Date(r.uploaded_at).toLocaleString()}</td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          onClick={() => handleDownload(r)}
+                          disabled={!!downloadLoading}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold disabled:opacity-50"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          {downloadLoading && setup && downloadLoading === setup.id ? 'Downloading…' : 'Download'}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
             </tbody>
           </table>
         </div>

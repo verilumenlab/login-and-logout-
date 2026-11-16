@@ -46,6 +46,7 @@ from app.models.os_event import OSSessionEvent
 from app.models.schedule import Holiday, WorkSchedule
 from app.services.attendance_engine import (
     calculate_daily_attendance,
+    classify_break_type,
     determine_work_date_for_clock_in,
     is_overnight_schedule,
     recalculate_attendance_day,
@@ -664,3 +665,100 @@ async def test_offline_batch_synchronization_and_idempotency(
     assert res2["received_count"] == 2
     assert res2["inserted_count"] == 0
     assert res2["duplicate_count"] == 2
+
+
+def _local_midday(hours: int = 12, minutes: int = 30) -> datetime:
+    """Build a local midday timestamp (aware) for lunch-window classification tests."""
+    local_tz = datetime.now().astimezone().tzinfo
+    return datetime(2026, 11, 18, hours, minutes, tzinfo=local_tz)
+
+
+def test_classify_break_type_lunch_and_personal():
+    start = _local_midday(12, 10)
+    end_long = start + timedelta(minutes=35)
+    end_short = start + timedelta(minutes=15)
+    assert classify_break_type(start, end_long) == BreakType.LUNCH
+    assert classify_break_type(start, end_short) == BreakType.PERSONAL
+
+    evening = datetime(2026, 11, 18, 16, 0, tzinfo=datetime.now().astimezone().tzinfo)
+    assert classify_break_type(evening, evening + timedelta(minutes=40)) == BreakType.PERSONAL
+    assert classify_break_type(start, None) == BreakType.LUNCH
+    assert classify_break_type(evening, None, current_type=BreakType.COFFEE) == BreakType.COFFEE
+
+
+@pytest.mark.asyncio
+async def test_auto_idle_break_reclassifies_as_lunch(client: AsyncClient, setup_attendance_env):
+    data = setup_attendance_env
+    headers = {"Authorization": f"Bearer {data['emp_token']}"}
+
+    t_in = datetime(2026, 11, 18, 9, 0, tzinfo=UTC)
+    await client.post("/api/v1/attendance/clock-in", json={"occurred_at": t_in.isoformat()}, headers=headers)
+
+    start = _local_midday(12, 5)
+    end = start + timedelta(minutes=40)
+    b_start = await client.post(
+        "/api/v1/attendance/break/start",
+        json={
+            "break_type": "PERSONAL",
+            "source": "AUTO_IDLE",
+            "client_event_id": "auto-idle-start-1",
+            "occurred_at": start.isoformat(),
+        },
+        headers=headers,
+    )
+    assert b_start.status_code == 201
+    assert b_start.json()["source"] == "AUTO_IDLE"
+    assert b_start.json()["break_type"] == "LUNCH"  # tentative midday
+
+    b_end = await client.post(
+        "/api/v1/attendance/break/end",
+        json={"occurred_at": end.isoformat()},
+        headers=headers,
+    )
+    assert b_end.status_code == 200
+    body = b_end.json()
+    assert body["duration_minutes"] == 40, body
+    assert body["source"] == "AUTO_IDLE", body
+    assert body["break_type"] == "LUNCH", body
+
+
+@pytest.mark.asyncio
+async def test_offline_auto_break_dedupe(client: AsyncClient, setup_attendance_env):
+    data = setup_attendance_env
+    headers = {"Authorization": f"Bearer {data['emp_token']}"}
+
+    t_in = datetime(2026, 11, 18, 9, 0, tzinfo=UTC)
+    await client.post("/api/v1/attendance/clock-in", json={"occurred_at": t_in.isoformat()}, headers=headers)
+
+    start = _local_midday(12, 0)
+    end = start + timedelta(minutes=32)
+    batch = {
+        "events": [
+            {
+                "client_event_id": "brk-start-dedupe-1",
+                "action": "BREAK_START",
+                "occurred_at": start.isoformat(),
+                "break_type": "PERSONAL",
+                "source": "AUTO_LOCK",
+                "notes": "auto:lock",
+            },
+            {
+                "client_event_id": "brk-end-dedupe-1",
+                "action": "BREAK_END",
+                "occurred_at": end.isoformat(),
+                "notes": "auto:end:lock",
+            },
+        ]
+    }
+    first = await client.post("/api/v1/attendance/sync-offline", json=batch, headers=headers)
+    assert first.status_code == 200
+    assert first.json()["inserted_count"] == 2
+
+    second = await client.post("/api/v1/attendance/sync-offline", json=batch, headers=headers)
+    assert second.status_code == 200
+    assert second.json()["inserted_count"] == 0
+    assert second.json()["duplicate_count"] == 2
+
+    status = await client.get("/api/v1/attendance/status", headers=headers)
+    assert status.status_code == 200
+    assert status.json()["total_break_minutes"] >= 32

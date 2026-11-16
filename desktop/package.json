@@ -1,7 +1,7 @@
 {
   "name": "workpulse-employee",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.9",
   "description": "WorkPulse Employee Windows desktop application",
   "author": "Verilumen Lab",
   "main": "electron/main.cjs",
@@ -81,7 +81,7 @@
     "publish": [
       {
         "provider": "generic",
-        "url": "http://localhost:8000/api/v1/updates/windows/production"
+        "url": "https://workpulse-api-pm0x.onrender.com/api/v1/updates/windows/production"
       }
     ]
   }

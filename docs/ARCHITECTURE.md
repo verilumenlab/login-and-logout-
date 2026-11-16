@@ -80,7 +80,7 @@ The repository enforces strict architectural boundaries:
 - Server-side indexing and aggregate calculation for manager dashboards.
 
 ### 3.3 Leave Management Module
-- Handles requests for Annual, Sick, Casual, Maternity, Paternity, and Unpaid leave.
+- Handles requests for Annual, Sick, and Casual leave.
 - Enforces state machine transitions: `PENDING` → `APPROVED` / `REJECTED` / `CANCELLED`.
 - Manager approval hierarchies with role-based authorization.
 

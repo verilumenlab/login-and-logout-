@@ -16,9 +16,24 @@ from app.middleware.security_headers import SecurityHeadersMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    # Startup actions
+    # Keep org leave policy in sync (Annual 24 / Sick 12 / Casual 12).
+    try:
+        from sqlalchemy import select
+
+        from app.core.database import AsyncSessionLocal
+        from app.core.seeds import seed_organization_leave_types
+        from app.models.organization import Organization
+
+        async with AsyncSessionLocal() as db:
+            orgs = (await db.execute(select(Organization))).scalars().all()
+            for org in orgs:
+                await seed_organization_leave_types(db, org.id)
+            await db.commit()
+    except Exception:
+        # Never block API startup if policy sync fails (e.g. migrations pending).
+        pass
+
     yield
-    # Shutdown actions
     await close_redis_client()
 
 

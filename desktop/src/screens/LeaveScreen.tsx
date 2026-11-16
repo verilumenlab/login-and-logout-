@@ -12,11 +12,60 @@ const STATUS_BADGE: Record<LeaveStatus, string> = {
   CANCELLED: 'badge-neutral',
 };
 
+/** Preferred order matching current org leave policy. */
+const TYPE_ORDER = ['ANNUAL', 'SICK', 'CASUAL'];
+const ALLOWED_CODES = new Set(TYPE_ORDER);
+
+const POLICY_QUOTA: Record<string, number> = {
+  ANNUAL: 24,
+  SICK: 12,
+  CASUAL: 12,
+};
+
 function available(b: LeaveBalance): number {
-  return b.allocated_days + b.carryover_days - b.used_days - b.pending_days;
+  return Math.max(0, b.allocated_days + b.carryover_days - b.used_days - b.pending_days);
 }
 
-export const LeaveScreen: React.FC = () => {
+function sortLeaveTypes(types: LeaveType[]): LeaveType[] {
+  return [...types].sort((a, b) => {
+    const ai = TYPE_ORDER.indexOf((a.code || '').toUpperCase());
+    const bi = TYPE_ORDER.indexOf((b.code || '').toUpperCase());
+    const aRank = ai === -1 ? 99 : ai;
+    const bRank = bi === -1 ? 99 : bi;
+    if (aRank !== bRank) return aRank - bRank;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+function sortBalances(balances: LeaveBalance[]): LeaveBalance[] {
+  return [...balances].sort((a, b) => {
+    const ai = TYPE_ORDER.indexOf((a.leave_type_code || '').toUpperCase());
+    const bi = TYPE_ORDER.indexOf((b.leave_type_code || '').toUpperCase());
+    const aRank = ai === -1 ? 99 : ai;
+    const bRank = bi === -1 ? 99 : bi;
+    if (aRank !== bRank) return aRank - bRank;
+    return (a.leave_type_name || '').localeCompare(b.leave_type_name || '');
+  });
+}
+
+function chipTone(code: string): string {
+  switch (code) {
+    case 'ANNUAL':
+      return 'balance-chip-annual';
+    case 'SICK':
+      return 'balance-chip-sick';
+    case 'CASUAL':
+      return 'balance-chip-casual';
+    default:
+      return '';
+  }
+}
+
+interface LeaveScreenProps {
+  dataVersion?: number;
+}
+
+export const LeaveScreen: React.FC<LeaveScreenProps> = ({ dataVersion = 0 }) => {
   const [types, setTypes] = useState<LeaveType[]>([]);
   const [balances, setBalances] = useState<LeaveBalance[]>([]);
   const [requests, setRequests] = useState<LeaveRequest[]>([]);
@@ -37,10 +86,19 @@ export const LeaveScreen: React.FC = () => {
   const load = useCallback(async () => {
     try {
       const [t, b, r] = await Promise.all([getLeaveTypes(), getLeaveBalances(), getLeaveRequests()]);
-      setTypes(t);
-      setBalances(b);
+      const orderedTypes = sortLeaveTypes(
+        t.filter((x) => ALLOWED_CODES.has((x.code || '').toUpperCase()))
+      );
+      const orderedBalances = sortBalances(
+        b.filter((x) => ALLOWED_CODES.has((x.leave_type_code || '').toUpperCase()))
+      );
+      setTypes(orderedTypes);
+      setBalances(orderedBalances);
       setRequests(r);
-      setLeaveTypeId((current) => current || t[0]?.id || '');
+      setLeaveTypeId((current) => {
+        if (current && orderedTypes.some((x) => x.id === current)) return current;
+        return orderedTypes[0]?.id || '';
+      });
       setLoadError(null);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : 'Could not load leave data');
@@ -48,9 +106,10 @@ export const LeaveScreen: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    void load();
+  }, [load, dataVersion]);
 
+  const selectedType = useMemo(() => types.find((t) => t.id === leaveTypeId) || null, [types, leaveTypeId]);
   const selectedBalance = useMemo(
     () => balances.find((b) => b.leave_type_id === leaveTypeId),
     [balances, leaveTypeId]
@@ -64,6 +123,9 @@ export const LeaveScreen: React.FC = () => {
     if (endDate < startDate) return setFormError('End date cannot be before the start date.');
     if (isHalfDay && startDate !== endDate) return setFormError('A half day must start and end on the same date.');
     if (reason.trim().length < 3) return setFormError('Please enter a reason (at least 3 characters).');
+    if (selectedBalance && available(selectedBalance) <= 0) {
+      return setFormError(`No ${selectedType?.name || 'leave'} balance left this year.`);
+    }
 
     setSubmitting(true);
     try {
@@ -102,19 +164,50 @@ export const LeaveScreen: React.FC = () => {
     <div className="screen-container">
       <div className="screen-header">
         <h2 className="screen-title">Apply for Leave</h2>
-        <p className="screen-subtitle">Requests go to your manager, then HR.</p>
+        <p className="screen-subtitle">Company policy this year</p>
+      </div>
+
+      <div className="leave-policy-strip">
+        <div className="leave-policy-item">
+          <span className="leave-policy-num">24</span>
+          <span className="leave-policy-name">Annual</span>
+        </div>
+        <div className="leave-policy-item">
+          <span className="leave-policy-num">12</span>
+          <span className="leave-policy-name">Sick</span>
+        </div>
+        <div className="leave-policy-item">
+          <span className="leave-policy-num">12</span>
+          <span className="leave-policy-name">Casual</span>
+        </div>
       </div>
 
       {loadError && <div className="alert-error text-xs">{loadError}</div>}
 
       {balances.length > 0 && (
         <div className="balance-row">
-          {balances.map((b) => (
-            <div key={b.id} className="balance-chip">
-              <div className="balance-value">{formatDays(available(b))}</div>
-              <div className="balance-label">{b.leave_type_name || b.leave_type_code}</div>
-            </div>
-          ))}
+          {balances.map((b) => {
+            const code = (b.leave_type_code || '').toUpperCase();
+            const yearly = POLICY_QUOTA[code] ?? b.allocated_days ?? selectedType?.annual_allowance ?? 0;
+            const leftOfYear = Math.max(0, yearly + b.carryover_days - b.used_days - b.pending_days);
+            const active = leaveTypeId === b.leave_type_id;
+            return (
+              <button
+                key={b.id}
+                type="button"
+                className={`balance-chip balance-chip-btn ${chipTone(code)} ${active ? 'balance-chip-active' : ''}`}
+                onClick={() => setLeaveTypeId(b.leave_type_id)}
+              >
+                <div className="balance-value">{formatDays(leftOfYear)}</div>
+                <div className="balance-label">{b.leave_type_name || b.leave_type_code}</div>
+                <div className="balance-meta">
+                  {`${formatDays(leftOfYear)} left of ${formatDays(yearly)} · ${formatDays(b.used_days)} used${
+                    b.pending_days ? ` · ${formatDays(b.pending_days)} pending` : ''
+                  }`}
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -122,14 +215,44 @@ export const LeaveScreen: React.FC = () => {
         <div className="form-group">
           <label htmlFor="leave-type">Leave type</label>
           <select id="leave-type" className="field" value={leaveTypeId} onChange={(e) => setLeaveTypeId(e.target.value)}>
-            {types.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
+            {types.map((t) => {
+              const code = (t.code || '').toUpperCase();
+              const quota = POLICY_QUOTA[code] ?? t.annual_allowance;
+              return (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                  {quota > 0 ? ` (${quota}/year)` : ''}
+                </option>
+              );
+            })}
           </select>
-          {selectedBalance && (
-            <span className="field-hint">{formatDays(available(selectedBalance))} day(s) available</span>
+          {selectedBalance && selectedType ? (
+            <span className="field-hint">
+              {(() => {
+                const code = (selectedType.code || '').toUpperCase();
+                const yearly =
+                  POLICY_QUOTA[code] ??
+                  (selectedBalance.allocated_days || selectedType.annual_allowance || 0);
+                const left = Math.max(
+                  0,
+                  yearly +
+                    selectedBalance.carryover_days -
+                    selectedBalance.used_days -
+                    selectedBalance.pending_days
+                );
+                return (
+                  <>
+                    {formatDays(left)} day(s) available of {formatDays(yearly)}
+                    {selectedBalance.carryover_days > 0
+                      ? ` (includes ${formatDays(selectedBalance.carryover_days)} carryover)`
+                      : ''}
+                  </>
+                );
+              })()}
+            </span>
+          ) : null}
+          {selectedType?.requires_attachment && (
+            <span className="field-hint">HR may ask for a supporting document for this leave type.</span>
           )}
         </div>
 

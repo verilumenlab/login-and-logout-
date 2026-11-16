@@ -53,6 +53,13 @@ class BreakType(str, enum.Enum):
     MEETING = "MEETING"
 
 
+class BreakSource(str, enum.Enum):
+    MANUAL = "MANUAL"
+    AUTO_IDLE = "AUTO_IDLE"
+    AUTO_LOCK = "AUTO_LOCK"
+    AUTO_SLEEP = "AUTO_SLEEP"
+
+
 class AdjustmentType(str, enum.Enum):
     MISSED_CLOCK_IN = "MISSED_CLOCK_IN"
     MISSED_CLOCK_OUT = "MISSED_CLOCK_OUT"
@@ -175,6 +182,8 @@ class AttendanceBreak(Base, UUIDMixin):
     duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_paid: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source: Mapped[str] = mapped_column(String(30), default=BreakSource.MANUAL.value, nullable=False)
+    client_event_id: Mapped[str | None] = mapped_column(String(100), index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )

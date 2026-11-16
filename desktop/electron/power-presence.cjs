@@ -115,20 +115,42 @@ function broadcast(channel, payload) {
   }
 }
 
+function emitBreakAway(signal, occurredAt) {
+  broadcast('break-away:queued', {
+    signal,
+    occurred_at: occurredAt || new Date().toISOString(),
+  });
+}
+
+function getSystemIdleSeconds() {
+  try {
+    // Electron returns idle time in seconds
+    return Math.max(0, Math.floor(Number(powerMonitor.getSystemIdleTime()) || 0));
+  } catch {
+    return 0;
+  }
+}
+
 function registerPowerMonitor() {
   const onLogout = (kind) => {
     const type = kind === 'suspend' ? 'SYSTEM_SUSPEND' : 'SYSTEM_SHUTDOWN';
-    enqueuePowerEvent(type, new Date().toISOString());
+    const at = new Date().toISOString();
+    enqueuePowerEvent(type, at);
+    if (kind === 'suspend') emitBreakAway('SUSPEND', at);
   };
   const onLogin = (kind) => {
     const type = kind === 'resume' ? 'SYSTEM_RESUME' : 'SYSTEM_STARTUP';
-    enqueuePowerEvent(type, new Date().toISOString());
+    const at = new Date().toISOString();
+    enqueuePowerEvent(type, at);
+    if (kind === 'resume') emitBreakAway('RESUME', at);
   };
 
   powerMonitor.on('suspend', () => onLogout('suspend'));
   powerMonitor.on('resume', () => onLogin('resume'));
   powerMonitor.on('shutdown', () => onLogout('shutdown'));
-  // lock-screen is not logout per product rules (lunch break); ignore
+  // Lock/unlock are not presence logout — they drive automatic breaks.
+  powerMonitor.on('lock-screen', () => emitBreakAway('LOCK', new Date().toISOString()));
+  powerMonitor.on('unlock-screen', () => emitBreakAway('UNLOCK', new Date().toISOString()));
 }
 
 module.exports = {
@@ -142,4 +164,6 @@ module.exports = {
   registerPowerMonitor,
   loadQueue,
   saveQueue,
+  getSystemIdleSeconds,
+  emitBreakAway,
 };

@@ -242,6 +242,14 @@ export default function ReportsPage() {
                 <div className="text-[10px] text-slate-500 uppercase font-semibold">Wi-Fi Verified</div>
                 <div className="text-base font-bold text-emerald-600">{previewData.wifi_verified_percentage}%</div>
               </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 text-center">
+                <div className="text-[10px] text-slate-500 uppercase font-semibold">Break Count</div>
+                <div className="text-base font-bold text-amber-600">{previewData.total_break_count ?? 0}</div>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 text-center">
+                <div className="text-[10px] text-slate-500 uppercase font-semibold">Break Hours</div>
+                <div className="text-base font-bold text-amber-700">{previewData.total_break_hours ?? 0}h</div>
+              </div>
             </div>
           </div>
         )}

@@ -173,6 +173,12 @@ class LeaveEngine:
             )
             db.add(balance)
             await db.flush()
+        else:
+            # Align allocation with current leave-type policy when HR updates allowances.
+            target = float(leave_type.annual_allowance)
+            if balance.allocated_days != target:
+                balance.allocated_days = target
+                await db.flush()
 
         return balance
 

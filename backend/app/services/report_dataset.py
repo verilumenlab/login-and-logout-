@@ -83,6 +83,7 @@ def _empty_attendance_fields(
         "gross_duration_hours": 0.0,
         "break_duration_hours": 0.0,
         "break_minutes": 0,
+        "break_count": 0,
         "net_duration_hours": 0.0,
         "status": status,
         "late_minutes": 0,
@@ -136,6 +137,7 @@ class ReportDataset:
             "total_net_hours": round(total_net, 1),
             "total_working_hours": round(total_net, 1),
             "total_break_hours": round(sum(float(a["break_duration_hours"]) for a in worked), 1),
+            "total_break_count": sum(int(a.get("break_count") or 0) for a in worked),
             "attendance_rate": round(present_days / possible_days * 100, 1) if possible_days else 0.0,
             "resolved_leaves": sum(1 for lv in self.leaves_data if lv["status"] in ("APPROVED", "REJECTED")),
             "active_headcount": len(self.employees_data),
@@ -187,7 +189,8 @@ async def build_report_dataset(
             .options(
                 selectinload(AttendanceDay.events)
                 .selectinload(AttendanceEvent.location_verification)
-                .selectinload(LocationVerification.location_event)
+                .selectinload(LocationVerification.location_event),
+                selectinload(AttendanceDay.breaks),
             )
             .where(
                 AttendanceDay.organization_id == organization_id,
@@ -386,6 +389,7 @@ async def build_report_dataset(
             still_open = bool(ordered) and ordered[-1].event_type == AttendanceEventType.CLOCK_IN
             net_min = a.total_work_minutes or 0
             break_min = a.total_break_minutes or 0
+            break_count = len(a.breaks or [])
             wifi_events = wifi_by_emp_date.get((e.id, work_date), [])
             logout_source = "" if still_open else (_source_label(last_out.notes, last_out.source) if last_out else "")
             gps_lat, gps_lng = _gps_coords(first_in)
@@ -405,6 +409,7 @@ async def build_report_dataset(
                 "gross_duration_hours": round((net_min + break_min) / 60.0, 2),
                 "break_duration_hours": round(break_min / 60.0, 2),
                 "break_minutes": break_min,
+                "break_count": break_count,
                 "net_duration_hours": round(net_min / 60.0, 2),
                 "status": status_value,
                 "late_minutes": a.late_minutes or 0,

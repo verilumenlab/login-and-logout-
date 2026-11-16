@@ -57,8 +57,8 @@ export const PresenceScreen: React.FC<PresenceScreenProps> = ({ tracker, dataVer
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (soft = false) => {
+    if (!soft) setLoading(true);
     try {
       const [start, end] = rangeDates(range);
       setDays((await getPresenceHistory(start, end)).days);
@@ -71,8 +71,13 @@ export const PresenceScreen: React.FC<PresenceScreenProps> = ({ tracker, dataVer
   }, [range]);
 
   useEffect(() => {
-    load();
-  }, [load, dataVersion]);
+    void load(false);
+  }, [load]);
+
+  useEffect(() => {
+    if (dataVersion === 0) return;
+    void load(true);
+  }, [dataVersion, load]);
 
   const totalMinutes = days.reduce((sum, d) => sum + d.worked_minutes, 0);
 

@@ -1,8 +1,8 @@
 """
 First-run setup for a fresh database (used on Render before the API starts).
 
-Idempotent: seeds system roles/permissions every time; creates the organization, its leave types and the
-first administrator only when the database has no organization yet.
+Idempotent: seeds system roles/permissions every time; syncs leave types for existing organizations;
+creates the organization, its leave types and the first administrator only when the database has no organization yet.
 
     python -m app.bootstrap
 
@@ -41,7 +41,14 @@ async def bootstrap() -> int:
 
         org_count = await db.scalar(select(func.count(Organization.id)))
         if org_count:
-            logger.info("Database already set up (%s organization(s)); roles refreshed.", org_count)
+            orgs = (await db.execute(select(Organization))).scalars().all()
+            for org in orgs:
+                await seed_organization_leave_types(db, org.id)
+            await db.commit()
+            logger.info(
+                "Database already set up (%s organization(s)); roles and leave types refreshed.",
+                org_count,
+            )
             return 0
 
         email = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "").strip().lower()

@@ -299,6 +299,7 @@ class ExcelReportEngine:
             "Clock-In",
             "Clock-Out",
             "Work Duration",
+            "Break Count",
             "Break (min)",
             "Net Hours",
             "Status",
@@ -309,7 +310,7 @@ class ExcelReportEngine:
             c = ws_att.cell(row=row_att, column=col_idx, value=h)
             c.font = FONT_HEADER
             c.fill = FILL_HEADER
-            c.alignment = ALIGN_CENTER if col_idx in (1, 2, 5, 6, 8, 10, 11) else ALIGN_LEFT
+            c.alignment = ALIGN_CENTER if col_idx in (1, 2, 5, 6, 8, 9, 11, 12) else ALIGN_LEFT
             c.border = BORDER_CELL
         ws_att.row_dimensions[row_att].height = 22
 
@@ -325,23 +326,27 @@ class ExcelReportEngine:
             c_wh = ws_att.cell(row=r_att_curr, column=7, value=log.get("work_duration", "0h 0m"))
             c_wh.alignment = ALIGN_RIGHT
 
-            c_br = ws_att.cell(row=r_att_curr, column=8, value=log.get("break_minutes", 0))
+            c_bc = ws_att.cell(row=r_att_curr, column=8, value=log.get("break_count", 0))
+            c_bc.alignment = ALIGN_RIGHT
+            c_bc.number_format = "#,##0"
+
+            c_br = ws_att.cell(row=r_att_curr, column=9, value=log.get("break_minutes", 0))
             c_br.alignment = ALIGN_RIGHT
             c_br.number_format = "#,##0"
 
-            c_nh = ws_att.cell(row=r_att_curr, column=9, value=round(log.get("net_hours", 0.0), 2))
+            c_nh = ws_att.cell(row=r_att_curr, column=10, value=round(log.get("net_hours", 0.0), 2))
             c_nh.alignment = ALIGN_RIGHT
             c_nh.number_format = "0.00"
 
             # Status Badge
-            c_st = ws_att.cell(row=r_att_curr, column=10, value=log.get("status", "PRESENT"))
+            c_st = ws_att.cell(row=r_att_curr, column=11, value=log.get("status", "PRESENT"))
             _apply_status_badge(c_st, log.get("status", "PRESENT"))
 
             # Location
-            c_loc = ws_att.cell(row=r_att_curr, column=11, value=log.get("location_status", "VERIFIED"))
+            c_loc = ws_att.cell(row=r_att_curr, column=12, value=log.get("location_status", "VERIFIED"))
             _apply_status_badge(c_loc, log.get("location_status", "VERIFIED"))
 
-            for ci in range(1, 10):
+            for ci in range(1, 13):
                 ws_att.cell(row=r_att_curr, column=ci).border = BORDER_CELL
                 ws_att.cell(row=r_att_curr, column=ci).font = FONT_REGULAR
 
@@ -593,6 +598,7 @@ class ExcelReportEngine:
             "Clock-In Time",
             "Clock-Out Time",
             "Gross Duration",
+            "Break Count",
             "Break (min)",
             "Net Hours",
             "Attendance Status",
@@ -603,7 +609,7 @@ class ExcelReportEngine:
             c = ws_att.cell(row=r_head, column=col_idx, value=h)
             c.font = FONT_HEADER
             c.fill = FILL_HEADER
-            c.alignment = ALIGN_CENTER if col_idx in (1, 2, 3, 5, 7, 8) else ALIGN_RIGHT
+            c.alignment = ALIGN_CENTER if col_idx in (1, 2, 3, 5, 6, 8, 9) else ALIGN_RIGHT
             c.border = BORDER_CELL
 
         r_att = 4
@@ -614,21 +620,25 @@ class ExcelReportEngine:
             ws_att.cell(row=r_att, column=3, value=a.get("clock_out", "--:--")).alignment = ALIGN_CENTER
             ws_att.cell(row=r_att, column=4, value=a.get("work_duration", "0h 0m")).alignment = ALIGN_RIGHT
 
-            c_b = ws_att.cell(row=r_att, column=5, value=a.get("break_minutes", 0))
+            c_bc = ws_att.cell(row=r_att, column=5, value=a.get("break_count", 0))
+            c_bc.alignment = ALIGN_RIGHT
+            c_bc.number_format = "#,##0"
+
+            c_b = ws_att.cell(row=r_att, column=6, value=a.get("break_minutes", 0))
             c_b.alignment = ALIGN_RIGHT
             c_b.number_format = "#,##0"
 
-            c_n = ws_att.cell(row=r_att, column=6, value=round(a.get("net_hours", 0.0), 2))
+            c_n = ws_att.cell(row=r_att, column=7, value=round(a.get("net_hours", 0.0), 2))
             c_n.alignment = ALIGN_RIGHT
             c_n.number_format = "0.00"
 
-            c_s = ws_att.cell(row=r_att, column=7, value=a.get("status", "PRESENT"))
+            c_s = ws_att.cell(row=r_att, column=8, value=a.get("status", "PRESENT"))
             _apply_status_badge(c_s, a.get("status", "PRESENT"))
 
-            c_loc = ws_att.cell(row=r_att, column=8, value=a.get("location_status", "VERIFIED"))
+            c_loc = ws_att.cell(row=r_att, column=9, value=a.get("location_status", "VERIFIED"))
             _apply_status_badge(c_loc, a.get("location_status", "VERIFIED"))
 
-            for ci in (1, 2, 3, 4, 5, 6):
+            for ci in (1, 2, 3, 4, 5, 6, 7):
                 ws_att.cell(row=r_att, column=ci).border = BORDER_CELL
                 ws_att.cell(row=r_att, column=ci).font = FONT_REGULAR
 
@@ -642,13 +652,18 @@ class ExcelReportEngine:
             for ci in range(2, 5):
                 ws_att.cell(row=r_att, column=ci, value="")
 
-            # Total Break Formula
-            c_tot_b = ws_att.cell(row=r_att, column=5, value=f"=SUM(E{start_att_row}:E{end_att_row})")
+            # Total Break Count Formula
+            c_tot_bc = ws_att.cell(row=r_att, column=5, value=f"=SUM(E{start_att_row}:E{end_att_row})")
+            c_tot_bc.number_format = "#,##0"
+            c_tot_bc.font = FONT_BOLD
+
+            # Total Break Minutes Formula
+            c_tot_b = ws_att.cell(row=r_att, column=6, value=f"=SUM(F{start_att_row}:F{end_att_row})")
             c_tot_b.number_format = "#,##0"
             c_tot_b.font = FONT_BOLD
 
             # Total Net Hours Formula
-            c_tot_h = ws_att.cell(row=r_att, column=6, value=f"=SUM(F{start_att_row}:F{end_att_row})")
+            c_tot_h = ws_att.cell(row=r_att, column=7, value=f"=SUM(G{start_att_row}:G{end_att_row})")
             c_tot_h.number_format = "0.00"
             c_tot_h.font = FONT_BOLD
 
@@ -1041,6 +1056,7 @@ class ExcelReportEngine:
             "Login Time",
             "Logout Time",
             "Work Duration",
+            "Break Count",
             "Break (min)",
             "Net Hours",
             "Status",
@@ -1054,7 +1070,7 @@ class ExcelReportEngine:
             c = ws_log.cell(row=row_2, column=col_idx, value=h)
             c.font = FONT_HEADER
             c.fill = FILL_HEADER
-            c.alignment = ALIGN_CENTER if col_idx in (1, 2, 5, 6, 8, 10, 11, 12, 13) else ALIGN_LEFT
+            c.alignment = ALIGN_CENTER if col_idx in (1, 2, 5, 6, 8, 9, 11, 12, 13, 14) else ALIGN_LEFT
             c.border = BORDER_CELL
         ws_log.row_dimensions[row_2].height = 22
 
@@ -1069,23 +1085,27 @@ class ExcelReportEngine:
             ws_log.cell(row=curr_r2, column=6, value=log.get("clock_out", "")).alignment = ALIGN_CENTER
             ws_log.cell(row=curr_r2, column=7, value=log.get("work_duration") or (f"{gross_h:.1f}h" if gross_h else "")).alignment = ALIGN_RIGHT
 
-            c_br = ws_log.cell(row=curr_r2, column=8, value=log.get("break_minutes", int(float(log.get("break_duration_hours") or 0.0) * 60)))
+            c_bc = ws_log.cell(row=curr_r2, column=8, value=log.get("break_count", 0))
+            c_bc.alignment = ALIGN_RIGHT
+            c_bc.number_format = "#,##0"
+
+            c_br = ws_log.cell(row=curr_r2, column=9, value=log.get("break_minutes", int(float(log.get("break_duration_hours") or 0.0) * 60)))
             c_br.alignment = ALIGN_RIGHT
             c_br.number_format = "#,##0"
 
-            c_nh = ws_log.cell(row=curr_r2, column=9, value=round(float(log.get("net_hours", log.get("net_duration_hours", 0.0)) or 0.0), 2))
+            c_nh = ws_log.cell(row=curr_r2, column=10, value=round(float(log.get("net_hours", log.get("net_duration_hours", 0.0)) or 0.0), 2))
             c_nh.alignment = ALIGN_RIGHT
             c_nh.number_format = "0.00"
 
-            c_st = ws_log.cell(row=curr_r2, column=10, value=log.get("status", ""))
+            c_st = ws_log.cell(row=curr_r2, column=11, value=log.get("status", ""))
             _apply_status_badge(c_st, log.get("status", ""))
 
-            ws_log.cell(row=curr_r2, column=11, value=log.get("location_status", "")).alignment = ALIGN_CENTER
-            ws_log.cell(row=curr_r2, column=12, value=log.get("logout_source", "")).alignment = ALIGN_CENTER
-            ws_log.cell(row=curr_r2, column=13, value=log.get("first_wifi_connected", "")).alignment = ALIGN_CENTER
-            ws_log.cell(row=curr_r2, column=14, value=log.get("wifi_networks", "")).alignment = ALIGN_LEFT
+            ws_log.cell(row=curr_r2, column=12, value=log.get("location_status", "")).alignment = ALIGN_CENTER
+            ws_log.cell(row=curr_r2, column=13, value=log.get("logout_source", "")).alignment = ALIGN_CENTER
+            ws_log.cell(row=curr_r2, column=14, value=log.get("first_wifi_connected", "")).alignment = ALIGN_CENTER
+            ws_log.cell(row=curr_r2, column=15, value=log.get("wifi_networks", "")).alignment = ALIGN_LEFT
 
-            for ci in (1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14):
+            for ci in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15):
                 ws_log.cell(row=curr_r2, column=ci).border = BORDER_CELL
                 ws_log.cell(row=curr_r2, column=ci).font = FONT_REGULAR
 

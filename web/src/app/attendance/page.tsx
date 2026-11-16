@@ -7,17 +7,23 @@ import { formatDuration, formatTime, localDateInput, shiftDate } from '@/lib/for
 
 type RangeId = 'week' | 'two_weeks' | 'month' | 'custom';
 
-const EVENT_LABELS: Record<PresenceEvent['event_type'], string> = {
+const EVENT_LABELS: Record<string, string> = {
   APP_LOGIN: 'Desktop app sign-in',
   APP_LOGOUT: 'Desktop app sign-out',
   WIFI_CONNECTED: 'Wi-Fi connected',
   WIFI_DISCONNECTED: 'Wi-Fi disconnected',
+  SYSTEM_SHUTDOWN: 'System shutdown',
+  SYSTEM_SUSPEND: 'System sleep',
+  SYSTEM_RESUME: 'System wake',
+  SYSTEM_STARTUP: 'System startup',
 };
 
-function EventIcon({ type }: { type: PresenceEvent['event_type'] }) {
+function EventIcon({ type }: { type: string }) {
   if (type === 'WIFI_CONNECTED') return <Wifi className="w-3.5 h-3.5 text-emerald-600" />;
   if (type === 'WIFI_DISCONNECTED') return <WifiOff className="w-3.5 h-3.5 text-rose-500" />;
-  if (type === 'APP_LOGIN') return <LogIn className="w-3.5 h-3.5 text-blue-600" />;
+  if (type === 'APP_LOGIN' || type === 'SYSTEM_RESUME' || type === 'SYSTEM_STARTUP') {
+    return <LogIn className="w-3.5 h-3.5 text-blue-600" />;
+  }
   return <LogOut className="w-3.5 h-3.5 text-slate-500" />;
 }
 
@@ -80,13 +86,15 @@ export default function AttendancePage() {
   const totals = useMemo(() => {
     const worked = days.filter((d) => d.first_login);
     const minutes = worked.reduce((sum, d) => sum + d.worked_minutes, 0);
+    const breaks = days.reduce((sum, d) => sum + (d.break_count || 0), 0);
+    const breakMinutes = days.reduce((sum, d) => sum + (d.total_break_minutes || 0), 0);
     const avgLogin = worked.length
       ? worked.reduce((sum, d) => {
           const t = new Date(d.first_login!);
           return sum + t.getHours() * 60 + t.getMinutes();
         }, 0) / worked.length
       : null;
-    return { present: worked.length, minutes, avgLogin };
+    return { present: worked.length, minutes, breaks, breakMinutes, avgLogin };
   }, [days]);
 
   const selected = people.find((p) => p.employee_id === employeeId);
@@ -183,10 +191,12 @@ export default function AttendancePage() {
       )}
 
       {selected && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
           {[
             ['Days logged in', String(totals.present)],
             ['Total time', formatDuration(totals.minutes)],
+            ['Breaks', String(totals.breaks)],
+            ['Break time', formatDuration(totals.breakMinutes)],
             ['Average per day', formatDuration(totals.present ? totals.minutes / totals.present : 0)],
             [
               'Average login',
@@ -211,13 +221,14 @@ export default function AttendancePage() {
               <th className="text-left font-bold px-4 py-3">Login</th>
               <th className="text-left font-bold px-4 py-3">Logout</th>
               <th className="text-right font-bold px-4 py-3">Hours</th>
+              <th className="text-right font-bold px-4 py-3">Breaks</th>
               <th className="text-left font-bold px-4 py-3">Wi-Fi</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {!loading && days.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-10 text-center text-slate-400">
+                <td colSpan={6} className="px-4 py-10 text-center text-slate-400">
                   {employeeId ? 'No logins recorded in this period.' : 'Choose an employee.'}
                 </td>
               </tr>
@@ -241,6 +252,11 @@ export default function AttendancePage() {
                       {d.is_logged_in ? <span className="text-emerald-600 font-semibold">Active</span> : formatTime(d.last_logout)}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">{d.first_login ? formatDuration(d.worked_minutes) : '—'}</td>
+                    <td className="px-4 py-3 text-right tabular-nums">
+                      {(d.break_count || 0) > 0
+                        ? `${d.break_count} · ${formatDuration(d.total_break_minutes || 0)}`
+                        : '—'}
+                    </td>
                     <td className="px-4 py-3 text-slate-500">
                       {d.first_wifi_connected_at
                         ? `${formatTime(d.first_wifi_connected_at)} · ${d.wifi_networks.join(', ')}`
@@ -249,7 +265,7 @@ export default function AttendancePage() {
                   </tr>
                   {open && (
                     <tr className="bg-slate-50/60 dark:bg-slate-800/30">
-                      <td colSpan={5} className="px-10 py-3">
+                      <td colSpan={6} className="px-10 py-3">
                         {d.events.length === 0 ? (
                           <span className="text-slate-400">No app or Wi-Fi events for this day.</span>
                         ) : (

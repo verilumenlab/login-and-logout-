@@ -9,6 +9,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -310,3 +311,39 @@ async def release_device_status(
         r = {**r, "needs_update": needs}
         out.append(DeviceUpdateStatusOut(**r))
     return out
+
+
+@router.get("/{release_id}/files/{file_id}/download", response_model=None)
+async def download_archived_release_file(
+    release_id: uuid.UUID,
+    file_id: uuid.UUID,
+    current_user: User = Depends(require_role(["Admin", "Super Admin"])),
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    """
+    Download any stored release package from the version archive
+    (published, paused, cancelled, rolled_back — files stay on disk).
+    """
+    release, file_row, path = await release_service.get_stored_release_file(
+        db, release_id=release_id, file_id=file_id
+    )
+    await release_service.record_event(
+        db,
+        event_type="download",
+        message=f"Archived download {file_row.filename} (v{release.version}, {release.status})",
+        organization_id=current_user.organization_id,
+        actor_user_id=current_user.id,
+        release_id=release.id,
+        details={
+            "filename": file_row.filename,
+            "sha256": file_row.sha256,
+            "status": release.status,
+            "source": "admin_archive",
+        },
+    )
+    await db.commit()
+    return FileResponse(
+        path=str(path),
+        filename=file_row.filename,
+        media_type=file_row.content_type or "application/octet-stream",
+    )

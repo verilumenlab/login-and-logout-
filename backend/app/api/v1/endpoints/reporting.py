@@ -205,6 +205,7 @@ class ReportPreviewResponse(BaseModel):
     absent_count: int
     total_work_hours: float
     total_break_hours: float
+    total_break_count: int = 0
     average_daily_hours: float
     leave_requests_count: int
     exceptions_count: int
@@ -262,7 +263,7 @@ async def preview_report_data(
     # 2. Attendance records in date range
     att_stmt = (
         select(AttendanceDay)
-        .options(selectinload(AttendanceDay.employee))
+        .options(selectinload(AttendanceDay.employee), selectinload(AttendanceDay.breaks))
         .where(
             AttendanceDay.organization_id == current_user.organization_id,
             AttendanceDay.work_date >= payload.start_date,
@@ -278,6 +279,7 @@ async def preview_report_data(
     absent_cnt = sum(1 for r in records if r.status == AttendanceStatus.ABSENT)
     tot_work_min = sum(r.total_work_minutes or 0 for r in records)
     tot_break_min = sum(r.total_break_minutes or 0 for r in records)
+    tot_break_count = sum(len(r.breaks or []) for r in records)
     tot_work_hrs = round(tot_work_min / 60.0, 2)
     tot_break_hrs = round(tot_break_min / 60.0, 2)
     avg_daily_hrs = round(tot_work_hrs / max(1, present_cnt), 2)
@@ -302,6 +304,8 @@ async def preview_report_data(
             "clock_in": r.shift_start.strftime("%H:%M") if r.shift_start else "--:--",
             "clock_out": r.shift_end.strftime("%H:%M") if r.shift_end else "--:--",
             "work_hours": round((r.total_work_minutes or 0) / 60.0, 2),
+            "break_count": len(r.breaks or []),
+            "break_minutes": r.total_break_minutes or 0,
             "wifi_status": "VERIFIED",
         })
 
@@ -316,6 +320,7 @@ async def preview_report_data(
         absent_count=absent_cnt,
         total_work_hours=tot_work_hrs,
         total_break_hours=tot_break_hrs,
+        total_break_count=tot_break_count,
         average_daily_hours=avg_daily_hrs,
         leave_requests_count=leave_cnt,
         exceptions_count=late_cnt + absent_cnt,

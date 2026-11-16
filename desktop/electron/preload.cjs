@@ -11,10 +11,16 @@ contextBridge.exposeInMainWorld('workpulse', {
   setPresenceSession: (session) => ipcRenderer.invoke('wp:setPresenceSession', session),
   drainPowerEvents: () => ipcRenderer.invoke('wp:drainPowerEvents'),
   peekPowerEvents: () => ipcRenderer.invoke('wp:peekPowerEvents'),
+  getSystemIdleSeconds: () => ipcRenderer.invoke('wp:getSystemIdleSeconds'),
   onPowerEventQueued: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('power-presence:queued', handler);
     return () => ipcRenderer.removeListener('power-presence:queued', handler);
+  },
+  onBreakAwayQueued: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('break-away:queued', handler);
+    return () => ipcRenderer.removeListener('break-away:queued', handler);
   },
   checkForUpdates: () => ipcRenderer.invoke('wp:checkForUpdates'),
   installUpdateNow: () => ipcRenderer.invoke('wp:installUpdateNow'),

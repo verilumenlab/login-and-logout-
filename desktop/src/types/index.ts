@@ -81,6 +81,8 @@ export interface PresenceDay {
   last_logout: string | null;
   is_logged_in: boolean;
   worked_minutes: number;
+  break_count?: number;
+  total_break_minutes?: number;
   status: string | null;
   first_wifi_connected_at: string | null;
   wifi_networks: string[];

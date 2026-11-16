@@ -1,26 +1,63 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { CalendarCheck, CalendarX, ChevronLeft, ChevronRight, Clock, Palmtree, Briefcase, Wifi } from 'lucide-react';
+import {
+  CalendarCheck,
+  CalendarX,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Coffee,
+  LogIn,
+  LogOut,
+  Palmtree,
+  Briefcase,
+  Wifi,
+} from 'lucide-react';
 
-import { getPresenceSummary } from '../api/backend';
-import { PresenceMonthSummary, UserSession } from '../types';
+import { getLeaveBalances, getPresenceSummary } from '../api/backend';
+import { BreakTrackerStatus } from '../presence/usePresenceTracker';
+import { LeaveBalance, PresenceMonthSummary, UserSession } from '../types';
 import { formatDays, formatDuration, formatMonth, formatTime, monthKey } from '../utils/format';
 
 interface DashboardScreenProps {
   session: UserSession;
   dataVersion: number;
+  breakStatus?: BreakTrackerStatus;
+  onWorkLogin?: () => Promise<void>;
+  onWorkLogout?: () => Promise<void>;
 }
 
-export const DashboardScreen: React.FC<DashboardScreenProps> = ({ session, dataVersion }) => {
+function available(b: LeaveBalance): number {
+  return Math.max(0, b.allocated_days + b.carryover_days - b.used_days - b.pending_days);
+}
+
+export const DashboardScreen: React.FC<DashboardScreenProps> = ({
+  session,
+  dataVersion,
+  breakStatus,
+  onWorkLogin,
+  onWorkLogout,
+}) => {
   const currentMonth = monthKey(new Date());
   const [month, setMonth] = useState(currentMonth);
   const [summary, setSummary] = useState<PresenceMonthSummary | null>(null);
+  const [balances, setBalances] = useState<LeaveBalance[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [busyAction, setBusyAction] = useState<'login' | 'logout' | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (soft = false) => {
+    if (!soft) setLoading(true);
     try {
-      setSummary(await getPresenceSummary(month));
+      const [presence, leaveBalances] = await Promise.all([
+        getPresenceSummary(month),
+        getLeaveBalances().catch(() => [] as LeaveBalance[]),
+      ]);
+      setSummary(presence);
+      setBalances(
+        leaveBalances.filter((b) =>
+          ['ANNUAL', 'SICK', 'CASUAL'].includes((b.leave_type_code || '').toUpperCase())
+        )
+      );
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load your summary');
@@ -30,8 +67,22 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ session, dataV
   }, [month]);
 
   useEffect(() => {
-    load();
-  }, [load, dataVersion]);
+    void load(false);
+  }, [load]);
+
+  useEffect(() => {
+    // Silent auto-refresh from the presence poller (every ~15s / on focus).
+    if (dataVersion === 0) return;
+    void load(true);
+  }, [dataVersion, load]);
+
+  // Live tick for "Worked" while logged in
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!summary?.today?.is_logged_in) return;
+    const id = window.setInterval(() => setTick((n) => n + 1), 15_000);
+    return () => window.clearInterval(id);
+  }, [summary?.today?.is_logged_in]);
 
   const shiftMonth = (delta: number) => {
     const [y, m] = month.split('-').map(Number);
@@ -39,32 +90,65 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ session, dataV
   };
 
   const today = summary?.today;
-  const todayMinutes = today?.is_logged_in && today.first_login
-    ? (Date.now() - new Date(today.first_login).getTime()) / 60000
-    : today?.worked_minutes ?? 0;
+  const isWorking = Boolean(today?.is_logged_in);
+  const todayMinutes =
+    isWorking && today?.first_login
+      ? (Date.now() - new Date(today.first_login).getTime()) / 60000
+      : today?.worked_minutes ?? 0;
+
+  const liveBreakMinutes = breakStatus?.isOnBreak ? breakStatus.breakElapsedMinutes || 0 : 0;
+  const todayBreakMinutes = (today?.total_break_minutes || 0) + liveBreakMinutes;
+  const todayBreakCount = (today?.break_count || 0) + (breakStatus?.isOnBreak ? 1 : 0);
+  const statusLabel = breakStatus?.isOnBreak
+    ? `${breakStatus.breakType === 'LUNCH' ? 'Lunch break' : 'On break'}${
+        liveBreakMinutes ? ` · ${liveBreakMinutes}m` : ''
+      }`
+    : isWorking
+      ? 'Working (Logged In)'
+      : today?.first_login
+        ? 'Logged out'
+        : 'Not logged in yet';
+
+  const runAction = async (kind: 'login' | 'logout') => {
+    if (busyAction) return;
+    setBusyAction(kind);
+    try {
+      if (kind === 'login') await onWorkLogin?.();
+      else await onWorkLogout?.();
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Could not ${kind}`);
+    } finally {
+      setBusyAction(null);
+    }
+  };
 
   return (
     <div className="screen-container">
       <div className="screen-header">
         <h2 className="screen-title">Hello, {session.first_name}</h2>
         <p className="screen-subtitle">
-          {[session.employee_code, session.department_name].filter(Boolean).join(' • ') || session.email}
+          {[session.employee_code, session.job_title || session.department_name].filter(Boolean).join(' • ') ||
+            session.email}
         </p>
       </div>
 
       {error && <div className="alert-error text-xs">{error}</div>}
 
-      <div className="card today-card">
+      <div className="card today-card dash-today">
         <div className="card-title-row">
           <span className="card-title">Today</span>
-          {today?.is_logged_in ? (
-            <span className="badge badge-success"><span className="pulse-dot dot-green" />&nbsp;Logged in</span>
-          ) : today?.first_login ? (
-            <span className="badge badge-neutral">Logged out</span>
-          ) : (
-            <span className="badge badge-warning">Not logged in yet</span>
-          )}
+          <span
+            className={`badge ${
+              breakStatus?.isOnBreak ? 'badge-warning' : isWorking ? 'badge-success' : 'badge-neutral'
+            }`}
+          >
+            {isWorking && !breakStatus?.isOnBreak ? <span className="pulse-dot dot-green" /> : null}
+            {isWorking && !breakStatus?.isOnBreak ? '\u00a0' : null}
+            {statusLabel}
+          </span>
         </div>
+
         <div className="today-grid">
           <div>
             <div className="kv-label">Login</div>
@@ -72,20 +156,75 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ session, dataV
           </div>
           <div>
             <div className="kv-label">Logout</div>
-            <div className="kv-value">{today?.is_logged_in ? '—' : formatTime(today?.last_logout)}</div>
+            <div className="kv-value">{isWorking ? '—' : formatTime(today?.last_logout)}</div>
           </div>
           <div>
-            <div className="kv-label">Time logged in</div>
+            <div className="kv-label">Worked</div>
             <div className="kv-value">{formatDuration(todayMinutes)}</div>
           </div>
         </div>
+
+        <div className="today-grid two dash-break-row">
+          <div>
+            <div className="kv-label">
+              <Coffee className="icon-xs" /> Breaks today
+            </div>
+            <div className="kv-value">{todayBreakCount}</div>
+          </div>
+          <div>
+            <div className="kv-label">Break time</div>
+            <div className="kv-value">{formatDuration(todayBreakMinutes)}</div>
+          </div>
+        </div>
+
         {today?.first_wifi_connected_at && (
           <div className="hint-row">
             <Wifi className="icon-xs" /> Laptop joined {today.wifi_networks.join(', ') || 'Wi-Fi'} at{' '}
             {formatTime(today.first_wifi_connected_at)}
           </div>
         )}
+
+        <div className="dash-action-row">
+          <button
+            type="button"
+            className="dash-action dash-action-login"
+            disabled={busyAction !== null || isWorking}
+            onClick={() => runAction('login')}
+            title={isWorking ? 'Already logged in' : 'Clock in'}
+          >
+            <span className="dash-action-circle">
+              <LogIn className="icon-md" />
+            </span>
+            <span className="dash-action-label">{busyAction === 'login' ? 'Logging in…' : 'Login'}</span>
+          </button>
+          <button
+            type="button"
+            className="dash-action dash-action-logout"
+            disabled={busyAction !== null || !isWorking}
+            onClick={() => runAction('logout')}
+            title={!isWorking ? 'Already logged out' : 'Clock out'}
+          >
+            <span className="dash-action-circle">
+              <LogOut className="icon-md" />
+            </span>
+            <span className="dash-action-label">
+              {busyAction === 'logout' ? 'Logging out…' : 'Logout (Clock Out)'}
+            </span>
+          </button>
+        </div>
       </div>
+
+      {balances.length > 0 && (
+        <div className="balance-row dash-leave-balances">
+          {balances.map((b) => (
+            <div key={b.id} className="balance-chip">
+              <div className="balance-value">{formatDays(available(b))}</div>
+              <div className="balance-label">{b.leave_type_name || b.leave_type_code}</div>
+              <div className="balance-meta">{formatDays(b.allocated_days)} / year</div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="month-switcher">
         <button className="icon-btn" onClick={() => shiftMonth(-1)} aria-label="Previous month">
@@ -144,9 +283,15 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ session, dataV
               />
             </div>
             <div className="legend-row">
-              <span><i className="legend-dot ratio-present" /> Present {summary.present_days}</span>
-              <span><i className="legend-dot ratio-leave" /> Leave {formatDays(summary.leave_days)}</span>
-              <span><i className="legend-dot ratio-rest" /> Absent {summary.absent_days}</span>
+              <span>
+                <i className="legend-dot ratio-present" /> Present {summary.present_days}
+              </span>
+              <span>
+                <i className="legend-dot ratio-leave" /> Leave {formatDays(summary.leave_days)}
+              </span>
+              <span>
+                <i className="legend-dot ratio-rest" /> Absent {summary.absent_days}
+              </span>
             </div>
             {summary.upcoming_leave_days > 0 && (
               <div className="hint-row">Upcoming approved leave: {formatDays(summary.upcoming_leave_days)} day(s)</div>
@@ -155,7 +300,9 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ session, dataV
 
           <div className="card">
             <div className="card-title-row">
-              <span className="card-title"><Clock className="icon-xs" /> Login time</span>
+              <span className="card-title">
+                <Clock className="icon-xs" /> Login time
+              </span>
             </div>
             <div className="today-grid two">
               <div>

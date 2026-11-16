@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { AlertCircle, Eye, EyeOff, Loader2, Lock, Mail, Server } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { AlertCircle, Eye, EyeOff, Loader2, Lock, Mail } from 'lucide-react';
 import { getBackendServerUrl, loginUser, setBackendServerUrl } from '../api/backend';
+import { clearSavedLogin, getSavedLogin, saveLoginCredentials } from '../api/savedLogin';
 import { DeviceInfo, UserSession } from '../types';
 
 const logoSrc = `${import.meta.env.BASE_URL}workpulse-logo.png`;
@@ -15,13 +16,32 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ device, onLoginSuccess
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [saveLogin, setSaveLogin] = useState(false);
+  const [hasSavedLogin, setHasSavedLogin] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showServerConfig, setShowServerConfig] = useState(false);
-  const [serverUrl, setServerUrl] = useState(getBackendServerUrl());
+  const [credsReady, setCredsReady] = useState(false);
+  const autoLoginTried = useRef(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const saved = await getSavedLogin();
+      if (cancelled) return;
+      if (saved) {
+        setEmail(saved.email);
+        setPassword(saved.password);
+        setSaveLogin(true);
+        setHasSavedLogin(true);
+      }
+      setCredsReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const signIn = async (emailValue: string, passwordValue: string, remember: boolean) => {
     if (!device) {
       setError('Still reading this laptop’s details. Please try again in a moment.');
       return;
@@ -29,13 +49,43 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ device, onLoginSuccess
     try {
       setLoading(true);
       setError(null);
-      setBackendServerUrl(serverUrl);
-      onLoginSuccess(await loginUser(email.trim(), password, device));
+      setBackendServerUrl(getBackendServerUrl());
+      const session = await loginUser(emailValue.trim(), passwordValue, device);
+      if (remember) {
+        await saveLoginCredentials(emailValue.trim(), passwordValue);
+        setHasSavedLogin(true);
+      } else {
+        await clearSavedLogin();
+        setHasSavedLogin(false);
+      }
+      onLoginSuccess(session);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Sign-in failed');
     } finally {
       setLoading(false);
     }
+  };
+
+  // If credentials were saved earlier, signing in uses them as soon as the laptop is ready.
+  useEffect(() => {
+    if (!credsReady || !device || !hasSavedLogin || autoLoginTried.current) return;
+    if (!email.trim() || !password) return;
+    autoLoginTried.current = true;
+    void signIn(email, password, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [credsReady, device, hasSavedLogin, email, password]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await signIn(email, password, saveLogin);
+  };
+
+  const handleClearSaved = async () => {
+    await clearSavedLogin();
+    setHasSavedLogin(false);
+    setSaveLogin(false);
+    setPassword('');
+    setError(null);
   };
 
   return (
@@ -101,23 +151,21 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ device, onLoginSuccess
             </div>
           </div>
 
-          <div className="login-row">
-            <span />
-            <button type="button" className="text-link" onClick={() => setShowServerConfig(!showServerConfig)}>
-              <Server className="icon-xs" /> Server
-            </button>
-          </div>
+          <label className="checkbox-label login-save-label">
+            <input
+              type="checkbox"
+              checked={saveLogin}
+              onChange={(e) => setSaveLogin(e.target.checked)}
+            />
+            <span>Save email &amp; password on this laptop</span>
+          </label>
 
-          {showServerConfig && (
-            <div className="server-config-panel">
-              <label htmlFor="server-url">Server address</label>
-              <input
-                id="server-url"
-                type="text"
-                value={serverUrl}
-                onChange={(e) => setServerUrl(e.target.value)}
-                placeholder="https://hr.company.com/api/v1"
-              />
+          {hasSavedLogin && (
+            <div className="login-saved-row">
+              <span className="field-hint">Saved login ready — Sign in uses it automatically.</span>
+              <button type="button" className="text-link" onClick={() => void handleClearSaved()}>
+                Clear saved
+              </button>
             </div>
           )}
 
@@ -127,6 +175,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ device, onLoginSuccess
                 <Loader2 className="icon-sm spin" />
                 &nbsp;Signing in…
               </>
+            ) : hasSavedLogin ? (
+              'Sign in with saved login'
             ) : (
               'Sign in'
             )}

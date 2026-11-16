@@ -33,6 +33,7 @@ from app.models.attendance import (
     AttendanceEventType,
     AttendanceSource,
     AttendanceStatus,
+    BreakSource,
     BreakType,
 )
 from app.models.auth import AuditLog, User
@@ -54,8 +55,10 @@ from app.schemas.attendance import (
 )
 from app.models.office import LocationPermissionStatus
 from app.services.attendance_engine import (
+    classify_break_type,
     determine_work_date_for_clock_in,
     ensure_utc,
+    finalize_break,
     process_attendance_adjustment_review,
     recalculate_attendance_day,
 )
@@ -326,7 +329,7 @@ async def start_break(
 ) -> AttendanceBreak:
     """Begins a categorized break (Lunch, Coffee, Personal, Meeting)."""
     now = datetime.now(UTC)
-    event_timestamp = payload.occurred_at or now
+    event_timestamp = ensure_utc(payload.occurred_at) or now
 
     # Find active attendance day
     stmt = (
@@ -350,14 +353,29 @@ async def start_break(
         if b.end_time is None:
             raise HTTPException(status_code=400, detail=f"Already on an active {b.break_type.value} break")
 
-    is_paid = payload.break_type in [BreakType.COFFEE, BreakType.MEETING]
+    source = payload.source or BreakSource.MANUAL
+    break_type = payload.break_type
+    if str(source.value if isinstance(source, BreakSource) else source).startswith("AUTO"):
+        break_type = classify_break_type(event_timestamp, None, current_type=break_type)
+
+    if payload.client_event_id:
+        dup = await db.execute(
+            select(AttendanceBreak).where(AttendanceBreak.client_event_id == payload.client_event_id)
+        )
+        existing = dup.scalars().first()
+        if existing:
+            return existing
+
+    is_paid = break_type in [BreakType.COFFEE, BreakType.MEETING]
 
     new_break = AttendanceBreak(
         attendance_day_id=att_day.id,
-        break_type=payload.break_type,
+        break_type=break_type,
         start_time=event_timestamp,
         is_paid=is_paid,
         reason=payload.reason,
+        source=source.value if isinstance(source, BreakSource) else str(source),
+        client_event_id=payload.client_event_id,
     )
     db.add(new_break)
     await db.commit()
@@ -377,7 +395,7 @@ async def end_break(
 ) -> AttendanceBreak:
     """Concludes the current ongoing break and recalculates break duration."""
     now = datetime.now(UTC)
-    event_timestamp = payload.occurred_at or now
+    event_timestamp = ensure_utc(payload.occurred_at) or now
 
     stmt = (
         select(AttendanceBreak)
@@ -395,13 +413,7 @@ async def end_break(
     if not active_break:
         raise HTTPException(status_code=400, detail="No active ongoing break found to end")
 
-    active_break.end_time = event_timestamp
-    t_end = ensure_utc(event_timestamp)
-    t_start = ensure_utc(active_break.start_time)
-    if t_end is not None and t_start is not None:
-        active_break.duration_minutes = max(0, int((t_end - t_start).total_seconds() / 60))
-    else:
-        active_break.duration_minutes = 0
+    finalize_break(active_break, event_timestamp)
     await db.commit()
     await db.refresh(active_break)
 
@@ -495,13 +507,21 @@ async def sync_offline_attendance(
     sorted_items = sorted(payload.events, key=lambda x: x.occurred_at)
 
     for item in sorted_items:
-        # Check duplicate
-        dup_res = await db.execute(
-            select(AttendanceEvent).where(AttendanceEvent.client_event_id == item.client_event_id)
-        )
-        if dup_res.scalars().first():
-            duplicate_count += 1
-            continue
+        # Check duplicate (clock events on attendance_events; break starts on attendance_breaks)
+        if item.action in ("BREAK_START", "BREAK_END"):
+            brk_dup = await db.execute(
+                select(AttendanceBreak).where(AttendanceBreak.client_event_id == item.client_event_id)
+            )
+            if brk_dup.scalars().first():
+                duplicate_count += 1
+                continue
+        else:
+            dup_res = await db.execute(
+                select(AttendanceEvent).where(AttendanceEvent.client_event_id == item.client_event_id)
+            )
+            if dup_res.scalars().first():
+                duplicate_count += 1
+                continue
 
         work_date = determine_work_date_for_clock_in(item.occurred_at, current_emp.work_schedule)
         affected_dates.add(work_date)
@@ -555,15 +575,34 @@ async def sync_offline_attendance(
             db.add(ev)
             inserted_count += 1
         elif item.action == "BREAK_START":
-            b_type = item.break_type or BreakType.LUNCH
+            # Skip starting another break while one is already open
+            open_res = await db.execute(
+                select(AttendanceBreak).where(
+                    AttendanceBreak.attendance_day_id == att_day.id,
+                    AttendanceBreak.end_time.is_(None),
+                )
+            )
+            if open_res.scalars().first():
+                duplicate_count += 1
+                continue
+
+            source = item.source or BreakSource.MANUAL
+            source_val = source.value if isinstance(source, BreakSource) else str(source)
+            occurred = ensure_utc(item.occurred_at) or item.occurred_at
+            b_type = item.break_type or BreakType.PERSONAL
+            if source_val.startswith("AUTO"):
+                b_type = classify_break_type(occurred, None, current_type=b_type)
             b_rec = AttendanceBreak(
                 attendance_day_id=att_day.id,
                 break_type=b_type,
-                start_time=item.occurred_at,
+                start_time=occurred,
                 is_paid=b_type in [BreakType.COFFEE, BreakType.MEETING],
                 reason=item.notes,
+                source=source_val,
+                client_event_id=item.client_event_id,
             )
             db.add(b_rec)
+            await db.flush()
             inserted_count += 1
         elif item.action == "BREAK_END":
             # Find open break
@@ -575,9 +614,10 @@ async def sync_offline_attendance(
             )
             open_b = b_end_res.scalars().first()
             if open_b:
-                open_b.end_time = item.occurred_at
-                open_b.duration_minutes = max(0, int((item.occurred_at - open_b.start_time).total_seconds() / 60))
+                finalize_break(open_b, ensure_utc(item.occurred_at) or item.occurred_at)
                 inserted_count += 1
+            else:
+                duplicate_count += 1
 
     await db.commit()
 

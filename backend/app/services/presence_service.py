@@ -32,7 +32,9 @@ from app.models.auth import Role, User
 from app.models.employee import EmployeeProfile, EmploymentStatus
 from app.models.leave import LeaveRequest, LeaveStatus
 from app.models.presence import (
+    AUDIT_ONLY_PRESENCE_EVENT_TYPES,
     LOGIN_EVENT_TYPES,
+    LOGOUT_EVENT_TYPES,
     PresenceAttendanceAction,
     PresenceEvent,
     PresenceEventType,
@@ -250,28 +252,32 @@ async def record_presence_event(
                     db, day, AttendanceEventType.CLOCK_IN, occurred_at, attendance_id, _describe(event)
                 )
                 action = PresenceAttendanceAction.CLOCK_IN
-    elif open_session is not None:
-        if occurred_at >= open_session[1]:
-            await _add_attendance_event(
-                db, open_session[0], AttendanceEventType.CLOCK_OUT, occurred_at, attendance_id, _describe(event)
-            )
-            action = PresenceAttendanceAction.CLOCK_OUT
-    else:
-        # Already logged out today: a later app logout / Wi-Fi disconnect becomes the day's logout time.
-        day = (
-            await db.execute(
-                select(AttendanceDay).where(
-                    AttendanceDay.employee_id == employee.id,
-                    AttendanceDay.work_date == event_work_date,
+    elif event.event_type in AUDIT_ONLY_PRESENCE_EVENT_TYPES:
+        # Sleep/wake are audited only; automatic breaks track the away gap.
+        action = PresenceAttendanceAction.NONE
+    elif event.event_type in LOGOUT_EVENT_TYPES:
+        if open_session is not None:
+            if occurred_at >= open_session[1]:
+                await _add_attendance_event(
+                    db, open_session[0], AttendanceEventType.CLOCK_OUT, occurred_at, attendance_id, _describe(event)
                 )
-            )
-        ).scalars().first()
-        last_out = ensure_utc(day.shift_end) if day is not None else None
-        if day is not None and last_out is not None and occurred_at > last_out:
-            await _add_attendance_event(
-                db, day, AttendanceEventType.CLOCK_OUT, occurred_at, attendance_id, _describe(event)
-            )
-            action = PresenceAttendanceAction.CLOCK_OUT
+                action = PresenceAttendanceAction.CLOCK_OUT
+        else:
+            # Already logged out today: a later app logout / Wi-Fi disconnect becomes the day's logout time.
+            day = (
+                await db.execute(
+                    select(AttendanceDay).where(
+                        AttendanceDay.employee_id == employee.id,
+                        AttendanceDay.work_date == event_work_date,
+                    )
+                )
+            ).scalars().first()
+            last_out = ensure_utc(day.shift_end) if day is not None else None
+            if day is not None and last_out is not None and occurred_at > last_out:
+                await _add_attendance_event(
+                    db, day, AttendanceEventType.CLOCK_OUT, occurred_at, attendance_id, _describe(event)
+                )
+                action = PresenceAttendanceAction.CLOCK_OUT
 
     db.add(
         PresenceEvent(
@@ -309,7 +315,7 @@ async def get_presence_days(
     days = (
         await db.execute(
             select(AttendanceDay)
-            .options(selectinload(AttendanceDay.events))
+            .options(selectinload(AttendanceDay.events), selectinload(AttendanceDay.breaks))
             .where(
                 AttendanceDay.employee_id == employee.id,
                 AttendanceDay.work_date >= start_date,
@@ -357,6 +363,9 @@ async def get_presence_days(
         row.first_wifi_connected_at = wifi_at
         row.wifi_networks = wifi_names
 
+        if att is not None:
+            row.break_count = len(att.breaks or [])
+            row.total_break_minutes = att.total_break_minutes or 0
         if att is not None and att.shift_start is not None:
             ordered = sorted(att.events, key=lambda e: ensure_utc(e.timestamp) or now)
             row.is_logged_in = bool(ordered) and is_clock_in(ordered[-1].event_type)

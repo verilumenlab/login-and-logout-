@@ -108,6 +108,7 @@ function registerIpc() {
   });
   ipcMain.handle('wp:drainPowerEvents', async () => powerPresence.drainQueue());
   ipcMain.handle('wp:peekPowerEvents', async () => powerPresence.peekQueue());
+  ipcMain.handle('wp:getSystemIdleSeconds', async () => powerPresence.getSystemIdleSeconds());
 }
 
 app.whenReady().then(async () => {

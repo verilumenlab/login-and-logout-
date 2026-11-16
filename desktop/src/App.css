@@ -45,6 +45,85 @@ button {
 .tone-red { color: #dc2626; }
 .tone-slate { color: #64748b; }
 
+/* ---------- Dashboard action circles ---------- */
+.dash-today {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dash-action-row {
+  display: flex;
+  justify-content: center;
+  gap: 28px;
+  padding: 8px 0 4px;
+}
+
+.dash-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.dash-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.dash-action-circle {
+  width: 72px;
+  height: 72px;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.18);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.dash-action:not(:disabled):hover .dash-action-circle {
+  transform: translateY(-1px) scale(1.03);
+}
+
+.dash-action-login .dash-action-circle {
+  background: linear-gradient(160deg, #22c55e 0%, #16a34a 100%);
+}
+
+.dash-action-logout .dash-action-circle {
+  background: linear-gradient(160deg, #f87171 0%, #dc2626 100%);
+}
+
+.dash-action-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #334155;
+  text-align: center;
+  max-width: 96px;
+  line-height: 1.25;
+}
+
+.dash-leave-balances {
+  margin-top: 2px;
+}
+
+.dash-break-row {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.dash-break-row .kv-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* ---------- App shell ---------- */
 .app-shell {
   display: flex;
@@ -107,9 +186,8 @@ button {
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  object-fit: contain;
-  background: #ffffff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  object-fit: cover;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
   flex-shrink: 0;
 }
 
@@ -222,6 +300,7 @@ button {
 .today-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
   gap: 8px;
 }
 
@@ -446,6 +525,48 @@ button {
 }
 
 /* ---------- Leave ---------- */
+.leave-policy-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.leave-policy-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 4px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #eff6ff 0%, #f8fafc 100%);
+  border: 1px solid #dbeafe;
+}
+
+.leave-policy-item-muted {
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+  border-color: #e2e8f0;
+}
+
+.leave-policy-num {
+  font-size: 16px;
+  font-weight: 800;
+  color: #1d4ed8;
+  line-height: 1;
+}
+
+.leave-policy-item-muted .leave-policy-num {
+  color: #64748b;
+}
+
+.leave-policy-name {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #475569;
+}
+
 .balance-row {
   display: flex;
   gap: 8px;
@@ -455,21 +576,59 @@ button {
 
 .balance-chip {
   flex: 0 0 auto;
-  min-width: 90px;
+  min-width: 126px;
+  max-width: 168px;
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 10px;
   padding: 8px 10px;
+  text-align: left;
 }
 
+.balance-chip-btn {
+  cursor: pointer;
+  font: inherit;
+  appearance: none;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.12s ease;
+}
+
+.balance-chip-btn:hover {
+  border-color: #93c5fd;
+}
+
+.balance-chip-btn:active {
+  transform: scale(0.98);
+}
+
+.balance-chip-active {
+  border-color: #60a5fa;
+  background: #eff6ff;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+
+.balance-chip-annual .balance-value { color: #1d4ed8; }
+.balance-chip-sick .balance-value { color: #b45309; }
+.balance-chip-casual .balance-value { color: #047857; }
+.balance-chip-unpaid .balance-value { color: #64748b; }
+
 .balance-value {
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 800;
   color: #1d4ed8;
+  line-height: 1.1;
 }
 
 .balance-label {
-  font-size: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #334155;
+  margin-top: 2px;
+}
+
+.balance-meta {
+  margin-top: 4px;
+  font-size: 9px;
+  line-height: 1.35;
   color: #64748b;
 }
 
@@ -707,6 +866,19 @@ textarea.field { resize: vertical; }
   align-items: center;
   justify-content: space-between;
   font-size: 11px;
+}
+
+.login-save-label {
+  margin-top: -2px;
+  user-select: none;
+}
+
+.login-saved-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: -4px;
 }
 
 .checkbox-label {

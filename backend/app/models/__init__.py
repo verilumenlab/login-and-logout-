@@ -14,6 +14,7 @@ from app.models.attendance import (
     AttendanceEventType,
     AttendanceSource,
     AttendanceStatus,
+    BreakSource,
     BreakType,
 )
 from app.models.auth import (
@@ -138,6 +139,7 @@ __all__ = [
     "AttendanceSource",
     # 16. Attendance breaks
     "AttendanceBreak",
+    "BreakSource",
     "BreakType",
     # 17. Attendance adjustments
     "AttendanceAdjustment",

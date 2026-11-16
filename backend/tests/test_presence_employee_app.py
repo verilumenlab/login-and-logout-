@@ -410,3 +410,40 @@ async def test_leave_review_queue_scoping_and_hr_handles_employee_without_manage
         f"/api/v1/leave/{uuid.uuid4()}/manager-review", json={"action": "APPROVE"}, headers=manager_headers
     )
     assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_suspend_resume_are_audit_only_not_clock(client: AsyncClient, employee_env: dict):
+    """Sleep/wake stay on the presence timeline but do not clock out/in (breaks handle that)."""
+    from app.models.presence import LOGIN_EVENT_TYPES, LOGOUT_EVENT_TYPES, PresenceEventType
+
+    assert PresenceEventType.SYSTEM_SUSPEND not in LOGOUT_EVENT_TYPES
+    assert PresenceEventType.SYSTEM_RESUME not in LOGIN_EVENT_TYPES
+
+    headers = employee_env["headers"]
+    day = datetime.now(UTC).date() - timedelta(days=1)
+
+    login = await client.post(
+        "/api/v1/presence/events",
+        json={"events": [_event("APP_LOGIN", _at(day, 9, 0))]},
+        headers=headers,
+    )
+    assert login.status_code == 200
+    assert login.json()["is_logged_in"] is True
+
+    power = await client.post(
+        "/api/v1/presence/events",
+        json={
+            "events": [
+                _event("SYSTEM_SUSPEND", _at(day, 13, 0)),
+                _event("SYSTEM_RESUME", _at(day, 13, 45)),
+            ]
+        },
+        headers=headers,
+    )
+    assert power.status_code == 200
+    results = {r["client_event_id"]: r for r in power.json()["results"]}
+    for r in results.values():
+        assert r["status"] == "RECORDED"
+        assert r["attendance_action"] == "NONE"
+    assert power.json()["is_logged_in"] is True

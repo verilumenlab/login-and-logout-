@@ -53,6 +53,8 @@ class PresenceDay(BaseModel):
     last_logout: datetime | None = None
     is_logged_in: bool = False
     worked_minutes: int = 0
+    break_count: int = 0
+    total_break_minutes: int = 0
     status: str | None = None
     first_wifi_connected_at: datetime | None = None
     wifi_networks: list[str] = Field(default_factory=list)

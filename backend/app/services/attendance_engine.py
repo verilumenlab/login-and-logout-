@@ -140,6 +140,70 @@ def is_clock_out(ev_type: Any) -> bool:
     return "CLOCK_OUT" in str(val).upper()
 
 
+# Auto-break classification (local wall-clock midday lunch window)
+LUNCH_WINDOW_START_HOUR = 12
+LUNCH_WINDOW_END_HOUR = 14
+LUNCH_MIN_DURATION_MINUTES = 30
+
+
+def _as_break_type(value: BreakType | str | None) -> BreakType | None:
+    if value is None:
+        return None
+    if isinstance(value, BreakType):
+        return value
+    try:
+        return BreakType(str(value))
+    except ValueError:
+        return None
+
+
+def classify_break_type(
+    start_time: datetime,
+    end_time: datetime | None,
+    *,
+    current_type: BreakType | str | None = None,
+) -> BreakType:
+    """
+    Classify break type from start/end times.
+    Long midday away time (>=30m starting 12:00-14:00 local) becomes LUNCH.
+    Preserves COFFEE/MEETING. Otherwise PERSONAL (tentative LUNCH at start if midday).
+    """
+    current = _as_break_type(current_type)
+    if current in (BreakType.COFFEE, BreakType.MEETING):
+        return current
+
+    start = ensure_utc(start_time)
+    if start is None:
+        return current or BreakType.PERSONAL
+
+    local_start = start.astimezone()
+    in_lunch_window = LUNCH_WINDOW_START_HOUR <= local_start.hour < LUNCH_WINDOW_END_HOUR
+
+    if end_time is None:
+        return BreakType.LUNCH if in_lunch_window else BreakType.PERSONAL
+
+    end = ensure_utc(end_time) or start
+    duration_minutes = max(0, int((end - start).total_seconds() / 60))
+    # Long enough: keep client midday LUNCH label, or upgrade when server-local window matches.
+    if duration_minutes >= LUNCH_MIN_DURATION_MINUTES and (current == BreakType.LUNCH or in_lunch_window):
+        return BreakType.LUNCH
+    return BreakType.PERSONAL
+
+
+def finalize_break(active_break: AttendanceBreak, end_time: datetime) -> AttendanceBreak:
+    """Set end time, duration, and lunch reclassification on an open break."""
+    t_end = ensure_utc(end_time) or datetime.now(UTC)
+    t_start = ensure_utc(active_break.start_time) or t_end
+    active_break.end_time = t_end
+    active_break.duration_minutes = max(0, int((t_end - t_start).total_seconds() / 60))
+    source = str(active_break.source or "MANUAL")
+    if source.startswith("AUTO"):
+        classified = classify_break_type(t_start, t_end, current_type=active_break.break_type)
+        active_break.break_type = classified
+        active_break.is_paid = classified in (BreakType.COFFEE, BreakType.MEETING)
+    return active_break
+
+
 def calculate_daily_attendance(
     work_date: date,
     events: list[AttendanceEvent],

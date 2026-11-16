@@ -17,7 +17,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
-  ShieldAlert,
+  KeyRound,
   Loader2,
   Trash2,
 } from 'lucide-react';
@@ -68,6 +68,15 @@ export default function EmployeesPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [createdCredentials, setCreatedCredentials] = useState<Employee | null>(null);
+  const [resetTarget, setResetTarget] = useState<Employee | null>(null);
+  const [resetPassword, setResetPassword] = useState('');
+  const [resetNotify, setResetNotify] = useState(true);
+  const [resetResult, setResetResult] = useState<{
+    email: string;
+    temporary_password: string;
+    message: string;
+    full_name?: string;
+  } | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
   // Form State
@@ -179,6 +188,33 @@ export default function EmployeesPage() {
       } catch (err: any) {
         alert(err.message || 'Failed to update status');
       }
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetTarget) return;
+    setActionLoading(true);
+    setError(null);
+    try {
+      const res = await apiClient.resetEmployeePassword(
+        resetTarget.id,
+        resetPassword.trim() || undefined,
+        resetNotify
+      );
+      setResetResult({
+        email: res.email,
+        temporary_password: res.temporary_password,
+        message: res.message,
+        full_name: resetTarget.full_name,
+      });
+      setResetTarget(null);
+      setResetPassword('');
+      setResetNotify(true);
+    } catch (err: any) {
+      setError(err.message || 'Failed to reset password');
+    } finally {
+      setActionLoading(false);
     }
   };
 
@@ -469,7 +505,21 @@ export default function EmployeesPage() {
                       </div>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
+                      <div className="flex items-center justify-end gap-2 flex-wrap">
+                        {myRole === 'ADMIN' && (
+                          <button
+                            onClick={() => {
+                              setResetPassword('');
+                              setResetNotify(true);
+                              setResetTarget(emp);
+                            }}
+                            className="inline-flex items-center gap-1 text-xs text-amber-700 hover:bg-amber-50 px-2.5 py-1 rounded font-medium transition"
+                            title="Reset employee password"
+                          >
+                            <KeyRound className="w-3 h-3" />
+                            Password
+                          </button>
+                        )}
                         <button
                           onClick={() => handleToggleStatus(emp)}
                           className={`text-xs px-2.5 py-1 rounded font-medium transition ${
@@ -754,6 +804,105 @@ export default function EmployeesPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Admin password reset */}
+      {resetTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-xl shadow-xl max-w-md w-full border border-slate-200 dark:border-slate-800">
+            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800">
+              <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <KeyRound className="w-5 h-5 text-amber-600" />
+                Reset password
+              </h2>
+              <p className="text-xs text-slate-500 mt-1">
+                Set a new password for <strong>{resetTarget.full_name}</strong> ({resetTarget.email}). Active sessions will be revoked.
+              </p>
+            </div>
+            <form onSubmit={handleResetPassword} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  New password (optional)
+                </label>
+                <input
+                  type="text"
+                  minLength={8}
+                  placeholder="Leave blank to auto-generate"
+                  value={resetPassword}
+                  onChange={(e) => setResetPassword(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono"
+                />
+                <p className="text-[11px] text-slate-500 mt-1">Minimum 8 characters if you set one manually.</p>
+              </div>
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={resetNotify}
+                  onChange={(e) => setResetNotify(e.target.checked)}
+                  className="rounded border-slate-300"
+                />
+                Email the employee about this reset
+              </label>
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setResetTarget(null)}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 rounded-lg"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading || (resetPassword.trim().length > 0 && resetPassword.trim().length < 8)}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2"
+                >
+                  {actionLoading && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Reset password
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {resetResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-xl shadow-xl max-w-lg w-full border border-slate-200 dark:border-slate-800">
+            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800">
+              <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                Password reset
+              </h2>
+              <p className="text-xs text-slate-500 mt-1">{resetResult.message}</p>
+            </div>
+            <div className="p-6 space-y-3 text-sm">
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 space-y-2 font-mono text-xs">
+                <div>
+                  <span className="text-slate-500">User ID (email)</span>
+                  <div className="font-semibold text-slate-900 dark:text-slate-100 break-all">{resetResult.email}</div>
+                </div>
+                <div>
+                  <span className="text-slate-500">New password</span>
+                  <div className="font-semibold text-blue-700 dark:text-blue-300 break-all">
+                    {resetResult.temporary_password}
+                  </div>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Copy this password now — it is shown only once. Share it securely with {resetResult.full_name || 'the employee'}.
+              </p>
+              <div className="flex justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setResetResult(null)}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
