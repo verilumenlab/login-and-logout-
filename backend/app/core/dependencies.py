@@ -219,8 +219,7 @@ async def check_employee_record_access(
     """
     Strict authorization rule evaluator:
     - Super Admin / Admin: full organization access.
-    - HR: employee, attendance, leave and reporting access across tenant organization.
-    - Manager: assigned employees only (ManagerAssignment reporting lines) or own records.
+    - HR / Manager: employee, attendance, leave and reporting access across the organization.
     - Employee: own records only.
     """
     # 1. Superuser
@@ -229,9 +228,11 @@ async def check_employee_record_access(
 
     user_role = current_user.role.name.strip().lower() if current_user.role else ""
 
-    # 2. Admin / HR full org visibility
-    if any(r in user_role for r in ["admin", "super administrator", "hr"]):
-        # Verify target employee is within same organization
+    # 2. Admin / HR / Manager — full org visibility (manager matches HR)
+    if any(
+        r in user_role
+        for r in ("admin", "super administrator", "hr", "human resources", "manager", "lead", "supervisor")
+    ):
         stmt = select(EmployeeProfile).where(
             EmployeeProfile.id == target_employee_id,
             EmployeeProfile.organization_id == current_user.organization_id,
@@ -248,17 +249,6 @@ async def check_employee_record_access(
     # 3. Own record access (always permitted)
     if current_emp.id == target_employee_id:
         return True
-
-    # 4. Manager access (assigned employees only)
-    if any(r in user_role for r in ["manager", "lead", "supervisor"]):
-        mgr_stmt = select(ManagerAssignment).where(
-            ManagerAssignment.manager_id == current_emp.id,
-            ManagerAssignment.employee_id == target_employee_id,
-            ManagerAssignment.organization_id == current_user.organization_id,
-        )
-        res = await db.execute(mgr_stmt)
-        assignment = res.scalars().first()
-        return assignment is not None
 
     # Standard Employee can only access own records
     return False
