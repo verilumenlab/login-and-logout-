@@ -19,8 +19,10 @@ from app.api.v1.endpoints import (
     offices,
     os_events,
     presence,
+    releases,
     reporting,
     schedules,
+    updates,
     websockets,
 )
 
@@ -41,6 +43,8 @@ api_router.include_router(os_events.router, prefix="/os-events", tags=["OS Sessi
 api_router.include_router(presence.router, prefix="/presence", tags=["Employee Presence"])
 api_router.include_router(leave.router, prefix="/leave", tags=["Leave Management"])
 api_router.include_router(devices.router, prefix="/devices", tags=["Device Management"])
+api_router.include_router(releases.router, prefix="/releases", tags=["Application Releases"])
+api_router.include_router(updates.router, prefix="/updates", tags=["Desktop Updates"])
 api_router.include_router(audit.router, prefix="/audit-logs", tags=["Audit Logs"])
 api_router.include_router(reporting.router, prefix="/reports", tags=["Reporting & Exports"])
 api_router.include_router(notifications.router, prefix="/notifications", tags=["Notifications & Email"])

@@ -8,6 +8,7 @@ import {
   Laptop,
   LogIn,
   Mail,
+  Package,
   Shield,
   Sliders,
   Timer,
@@ -37,6 +38,7 @@ const SCHEDULES: NavItem = { href: '/schedules', label: 'Report Schedules', icon
 const EMAILS: NavItem = { href: '/emails', label: 'Email Outbox', icon: Mail };
 const OFFICES: NavItem = { href: '/offices', label: 'Offices & Wi-Fi', icon: Globe };
 const DEVICES: NavItem = { href: '/devices', label: 'Devices', icon: Laptop };
+const RELEASES: NavItem = { href: '/releases', label: 'App Releases', icon: Package };
 const AUDIT: NavItem = { href: '/audit-logs', label: 'Audit Trail', icon: Shield };
 const HEALTH: NavItem = { href: '/health', label: 'System Health', icon: HeartPulse };
 export const NAV_BY_ROLE: Record<UserRole, NavSection[]> = {
@@ -44,16 +46,18 @@ export const NAV_BY_ROLE: Record<UserRole, NavSection[]> = {
     { title: 'Daily', items: [OVERVIEW, PRESENCE, ATTENDANCE, LEAVE] },
     { title: 'People', items: [EMPLOYEES, DEPARTMENTS] },
     { title: 'Reports', items: [REPORTS, SCHEDULES, EMAILS] },
-    { title: 'System', items: [OFFICES, DEVICES, AUDIT, HEALTH] },
+    { title: 'System', items: [OFFICES, DEVICES, RELEASES, AUDIT, HEALTH] },
   ],
   HR: [
     { title: 'Daily', items: [OVERVIEW, PRESENCE, ATTENDANCE, LEAVE] },
     { title: 'People', items: [EMPLOYEES] },
     { title: 'Reports', items: [REPORTS, SCHEDULES, EMAILS] },
   ],
+  // Manager portal matches HR: organization-wide people, leave, and reports.
   MANAGER: [
-    { title: 'My team', items: [OVERVIEW, PRESENCE, ATTENDANCE, LEAVE] },
-    { title: 'Reports', items: [REPORTS] },
+    { title: 'Daily', items: [OVERVIEW, PRESENCE, ATTENDANCE, LEAVE] },
+    { title: 'People', items: [EMPLOYEES] },
+    { title: 'Reports', items: [REPORTS, SCHEDULES, EMAILS] },
   ],
 };
 

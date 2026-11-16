@@ -67,9 +67,8 @@ export default function LeaveApprovalsPage() {
   const canAct = useCallback(
     (stage: Stage) => {
       if (role === 'ADMIN') return true;
-      if (role === 'MANAGER') return stage === 'MANAGER';
-      // HR gives final approval, and may take the manager step for employees with no manager.
-      return role === 'HR';
+      // Manager has the same leave authority as HR (manager step + final HR step).
+      return role === 'HR' || role === 'MANAGER';
     },
     [role]
   );
@@ -135,7 +134,7 @@ export default function LeaveApprovalsPage() {
             <CalendarDays className="w-5 h-5 text-blue-600" /> Leave
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Employees apply from the desktop app. The manager approves first, then HR gives final approval.
+            Employees apply from the desktop app. Manager and HR share the same org-wide leave queue (manager step, then final approval).
           </p>
         </div>
         <button

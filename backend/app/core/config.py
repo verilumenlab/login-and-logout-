@@ -92,6 +92,13 @@ class Settings(BaseSettings):
     WEEKLY_REPORT_HR_EMAILS: str = "satish@verilumen.ai"
     WEEKLY_REPORT_MANAGER_EMAILS: str = "kp@verilumen.ai"
 
+    # Employee Application Release Management (Electron / Windows)
+    RELEASE_STORAGE_DIR: str = "storage/releases"
+    RELEASE_CI_TOKEN: str = "change-me-release-ci-token-min-32-chars"
+    RELEASE_DEFAULT_CHANNEL: str = "staging"
+    RELEASE_MAX_UPLOAD_BYTES: int = 262144000  # 250 MB
+    FRONTEND_UPDATE_FEED_BASE_URL: str = "http://localhost:8000/api/v1/updates/windows"
+
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
     def assemble_cors_origins(cls, v: str | list[str]) -> list[str]:
@@ -135,6 +142,14 @@ class Settings(BaseSettings):
             return self.REDIS_URL
         auth = f":{self.REDIS_PASSWORD}@" if self.REDIS_PASSWORD else ""
         return f"redis://{auth}{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+
+    def get_cors_origins(self) -> list[str]:
+        """CORS allowlist: explicit origins plus FRONTEND_BASE_URL (portal host)."""
+        origins = list(self.BACKEND_CORS_ORIGINS or [])
+        frontend = (self.FRONTEND_BASE_URL or "").strip().rstrip("/")
+        if frontend and frontend not in origins:
+            origins.append(frontend)
+        return origins
 
 
 settings = Settings()

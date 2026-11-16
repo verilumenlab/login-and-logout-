@@ -103,6 +103,16 @@ button {
   border-radius: 8px;
 }
 
+.app-logo-mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  object-fit: contain;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  flex-shrink: 0;
+}
+
 .status-dot,
 .pulse-dot {
   width: 7px;
@@ -653,6 +663,14 @@ textarea.field { resize: vertical; }
   border-radius: 12px;
   background-color: #2563eb;
   margin-bottom: 8px;
+}
+
+.brand-logo-full {
+  display: block;
+  width: min(220px, 72vw);
+  height: auto;
+  margin: 0 auto 6px;
+  object-fit: contain;
 }
 
 .login-header h2 {

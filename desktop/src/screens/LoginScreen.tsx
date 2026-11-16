@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { AlertCircle, Eye, EyeOff, Loader2, Lock, Mail, Server, ShieldCheck } from 'lucide-react';
+import { AlertCircle, Eye, EyeOff, Loader2, Lock, Mail, Server } from 'lucide-react';
 import { getBackendServerUrl, loginUser, setBackendServerUrl } from '../api/backend';
 import { DeviceInfo, UserSession } from '../types';
+
+const logoSrc = `${import.meta.env.BASE_URL}workpulse-logo.png`;
 
 interface LoginScreenProps {
   device: DeviceInfo | null;
@@ -40,9 +42,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ device, onLoginSuccess
     <div className="login-wrapper">
       <div className="login-card">
         <div className="login-header">
-          <div className="brand-badge">
-            <ShieldCheck className="icon-md icon-white" />
-          </div>
+          <img className="brand-logo-full" src={logoSrc} alt="WorkPulse" />
           <h2>WorkPulse Employee</h2>
           <p className="subtitle">Sign in once — your login and logout are recorded automatically.</p>
         </div>

@@ -143,8 +143,12 @@ def _describe(event: PresenceEventIn) -> str:
         PresenceEventType.APP_LOGOUT: "Desktop app logout",
         PresenceEventType.WIFI_CONNECTED: "Wi-Fi connected",
         PresenceEventType.WIFI_DISCONNECTED: "Wi-Fi disconnected",
+        PresenceEventType.SYSTEM_SHUTDOWN: "Laptop shut down",
+        PresenceEventType.SYSTEM_SUSPEND: "Laptop sleep / hibernate",
+        PresenceEventType.SYSTEM_RESUME: "Laptop wake from sleep",
+        PresenceEventType.SYSTEM_STARTUP: "Laptop powered on",
     }
-    label = labels[event.event_type]
+    label = labels.get(event.event_type, str(event.event_type))
     return f"{label} ({event.ssid})" if event.ssid else label
 
 

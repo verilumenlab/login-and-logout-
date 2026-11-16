@@ -7,15 +7,17 @@ Employee Presence Endpoints
 - GET  /presence/my-summary  : dashboard totals (working days vs leave, total login time)
 - GET  /presence/team        : one day's login & logout board for HR/Admin (organization) or a manager (team)
 - GET  /presence/employee/{id}/history : one employee's login & logout table (same access rules as attendance)
+- GET  /presence/export.csv  : weekly (Mon–Fri) or monthly combined HR attendance CSV
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +27,7 @@ from app.core.dependencies import get_current_active_user, require_employee_acce
 from app.models.auth import User
 from app.models.department import Department
 from app.models.employee import EmployeeProfile, ManagerAssignment
+from app.models.organization import Organization
 from app.schemas.presence import (
     PresenceHistoryResponse,
     PresenceMonthSummary,
@@ -34,10 +37,29 @@ from app.schemas.presence import (
     TeamPresenceResponse,
 )
 from app.services import presence_service
+from app.services.attendance_csv_export import build_attendance_csv, period_range
+from app.services.report_dataset import build_report_dataset
 
 router = APIRouter()
 
 MAX_HISTORY_DAYS = 92
+ExportPeriod = Literal["weekly", "monthly"]
+
+
+def _team_scope_employee_ids(
+    current_user: User,
+    role_name: str,
+) -> tuple[str, list[uuid.UUID] | None]:
+    """Admin / HR / Manager → organization (None filter); else 403."""
+    if current_user.is_superuser or "admin" in role_name or "hr" in role_name or role_name == "human resources":
+        return "ORGANIZATION", None
+    # Managers match HR: full organization Login & Logout / CSV export.
+    if any(word in role_name for word in ("manager", "lead", "supervisor")):
+        return "ORGANIZATION", None
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Only managers, HR and administrators can export login records",
+    )
 
 
 def _history_range(start_date: date | None, end_date: date | None) -> tuple[date, date]:
@@ -107,7 +129,7 @@ async def get_team_presence(
 ) -> TeamPresenceResponse:
     """
     Login & logout board for one day.
-    Admin / HR see every employee in the organization; managers see their direct reports.
+    Admin / HR / Manager see every employee in the organization.
     """
     role_name = (current_user.role.name if current_user.role else "").strip().lower()
     day = work_date or datetime.now(UTC).date()
@@ -115,11 +137,8 @@ async def get_team_presence(
     if day > datetime.now(UTC).date() + timedelta(days=1):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Date cannot be in the future")
 
-    if current_user.is_superuser or "admin" in role_name or "hr" in role_name or role_name == "human resources":
-        scope = "ORGANIZATION"
-        employee_ids = None
-    elif any(word in role_name for word in ("manager", "lead", "supervisor")):
-        scope = "TEAM"
+    scope, employee_ids = _team_scope_employee_ids(current_user, role_name)
+    if scope == "TEAM":
         manager_profile = current_user.employee_profile
         employee_ids = []
         if manager_profile is not None:
@@ -133,16 +152,69 @@ async def get_team_presence(
                     )
                 ).scalars().all()
             )
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only managers, HR and administrators can view team login records",
-        )
 
     rows, counts, pending = await presence_service.get_team_presence(
         db, current_user.organization_id, employee_ids, day
     )
     return TeamPresenceResponse(work_date=day, scope=scope, counts=counts, pending_leave_requests=pending, rows=rows)
+
+
+@router.get("/export.csv")
+async def export_attendance_csv(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    period: Annotated[ExportPeriod, Query(description="weekly = Mon–Fri; monthly = full calendar month")],
+    work_date: Annotated[date | None, Query(alias="date")] = None,
+) -> Response:
+    """
+    Combined HR attendance CSV for the week or month containing `date`.
+    Same visibility as the Login & Logout board (org for Admin/HR/Manager).
+    """
+    role_name = (current_user.role.name if current_user.role else "").strip().lower()
+    ref = work_date or datetime.now(UTC).date()
+    if ref > datetime.now(UTC).date() + timedelta(days=1):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Date cannot be in the future")
+
+    scope, employee_ids = _team_scope_employee_ids(current_user, role_name)
+    if scope == "TEAM":
+        manager_profile = current_user.employee_profile
+        employee_ids = []
+        if manager_profile is not None:
+            employee_ids = list(
+                (
+                    await db.execute(
+                        select(ManagerAssignment.employee_id).where(
+                            ManagerAssignment.manager_id == manager_profile.id,
+                            ManagerAssignment.organization_id == current_user.organization_id,
+                        )
+                    )
+                ).scalars().all()
+            )
+
+    start, end = period_range(period, ref)
+    org = await db.get(Organization, current_user.organization_id)
+    tz_name = "UTC"
+    if org and isinstance(org.settings_json, dict):
+        tz_name = str(org.settings_json.get("timezone") or "UTC")
+
+    dataset = await build_report_dataset(
+        db,
+        current_user.organization_id,
+        start,
+        end,
+        tz_name,
+        include_all_calendar_days=(period == "monthly"),
+    )
+    if scope == "TEAM":
+        id_set = {str(eid) for eid in (employee_ids or [])}
+        dataset = dataset.for_employees(id_set)
+
+    filename, payload = build_attendance_csv(dataset, period, start, end)
+    return Response(
+        content=payload,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/employee/{employee_id}/history", response_model=PresenceHistoryResponse)

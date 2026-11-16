@@ -28,7 +28,13 @@ export const Navigation: React.FC<NavigationProps> = ({
   <>
     <header className="app-topbar">
       <div className="topbar-brand">
-        <div className="app-logo-badge">WP</div>
+        <img
+          className="app-logo-mark"
+          src={`${import.meta.env.BASE_URL}workpulse-mark.png`}
+          alt="WorkPulse"
+          width={32}
+          height={32}
+        />
         <div>
           <div className="topbar-name">
             {session.first_name} {session.last_name}

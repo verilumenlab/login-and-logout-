@@ -8,6 +8,7 @@ import { useRole } from './RoleContext';
 import { ThemeToggle } from './ThemeToggle';
 import { canAccess, NAV_BY_ROLE, PUBLIC_PATHS } from './nav-config';
 import { apiClient } from '@/lib/api-client';
+import { BrandLogo } from './BrandLogo';
 
 function FullScreenLoader() {
   return (
@@ -18,19 +19,7 @@ function FullScreenLoader() {
 }
 
 function Brand() {
-  return (
-    <Link href="/" className="flex items-center gap-2.5">
-      <div className="h-9 w-9 rounded-xl bg-blue-600 dark:bg-blue-500 flex items-center justify-center text-white font-black text-lg shadow-sm">
-        W
-      </div>
-      <div>
-        <span className="block font-bold text-slate-900 dark:text-slate-100 text-sm tracking-tight leading-tight">
-          WorkPulse
-        </span>
-        <span className="block text-[10px] text-slate-400 leading-none">Attendance &amp; Leave</span>
-      </div>
-    </Link>
-  );
+  return <BrandLogo href="/" variant="mark" size="md" showTagline />;
 }
 
 function ApiStatus() {

@@ -34,11 +34,12 @@ app = FastAPI(
 # Security Headers
 app.add_middleware(SecurityHeadersMiddleware)
 
-# Set CORS middleware
-if settings.BACKEND_CORS_ORIGINS or settings.BACKEND_CORS_ORIGIN_REGEX:
+# Set CORS middleware (FRONTEND_BASE_URL is always included so portal host stays allowed)
+_cors_origins = settings.get_cors_origins()
+if _cors_origins or settings.BACKEND_CORS_ORIGIN_REGEX:
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.BACKEND_CORS_ORIGINS,
+        allow_origins=_cors_origins,
         allow_origin_regex=settings.BACKEND_CORS_ORIGIN_REGEX,
         allow_credentials=True,
         allow_methods=["*"],

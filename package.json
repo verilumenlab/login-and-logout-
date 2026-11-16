@@ -18,7 +18,8 @@
     "lint:web": "npm run lint --workspace=web",
     "typecheck:backend": "backend\\.venv\\Scripts\\mypy.exe --config-file backend/pyproject.toml backend/app",
     "typecheck:web": "npm run type-check --workspace=web",
-    "typecheck:desktop": "tsc --noEmit --project desktop/tsconfig.json"
+    "typecheck:desktop": "tsc --noEmit --project desktop/tsconfig.json",
+    "brand:icons": "backend\\.venv\\Scripts\\python.exe scripts/generate_brand_icons.py"
   }
 }
 

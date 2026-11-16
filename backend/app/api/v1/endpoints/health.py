@@ -67,14 +67,41 @@ async def readiness_probe(
     uptime_seconds = round(time.time() - START_TIME, 2)
 
     provider = (settings.EMAIL_PROVIDER or "console").strip().lower()
+    smtp_user = (settings.SMTP_USER or "").strip()
+    smtp_password_set = bool("".join((settings.SMTP_PASSWORD or "").split()))
+    resend_key_set = bool((settings.RESEND_API_KEY or "").strip())
+
+    if provider == "smtp":
+        delivers = bool(smtp_user and smtp_password_set and settings.SMTP_HOST)
+        note = None
+        if not delivers:
+            note = (
+                "EMAIL_PROVIDER=smtp but SMTP_HOST / SMTP_USER / SMTP_PASSWORD is incomplete. "
+                "For Google Workspace use an App Password on SMTP_PASSWORD."
+            )
+        email_status = "healthy" if delivers else "degraded"
+    elif provider == "resend":
+        delivers = resend_key_set
+        note = None if delivers else "EMAIL_PROVIDER=resend but RESEND_API_KEY is empty."
+        email_status = "healthy" if delivers else "degraded"
+    else:
+        delivers = False
+        note = (
+            "EMAIL_PROVIDER=console only logs mail. Outbox may show SENT but nothing reaches an inbox."
+        )
+        email_status = "degraded"
+
     email_health = {
-        "status": "healthy" if provider in ("smtp", "resend") else "degraded",
+        "status": email_status,
         "provider": provider,
         "from_email": settings.DEFAULT_FROM_EMAIL,
-        "delivers_to_inbox": provider in ("smtp", "resend"),
-        "note": None
-        if provider in ("smtp", "resend")
-        else "EMAIL_PROVIDER=console only logs mail. Outbox may show SENT but nothing reaches an inbox.",
+        "smtp_user": smtp_user or None,
+        "smtp_host": settings.SMTP_HOST if provider == "smtp" else None,
+        "credentials_configured": (
+            smtp_password_set if provider == "smtp" else resend_key_set if provider == "resend" else False
+        ),
+        "delivers_to_inbox": delivers,
+        "note": note,
     }
 
     return DetailedHealthResponse(

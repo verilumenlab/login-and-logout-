@@ -24,6 +24,10 @@ const EVENT_LABELS: Record<PresenceEventType, string> = {
   APP_LOGOUT: 'App sign-out',
   WIFI_CONNECTED: 'Wi-Fi connected',
   WIFI_DISCONNECTED: 'Wi-Fi disconnected',
+  SYSTEM_SHUTDOWN: 'Laptop shut down',
+  SYSTEM_SUSPEND: 'Laptop sleep',
+  SYSTEM_RESUME: 'Laptop wake',
+  SYSTEM_STARTUP: 'Laptop power on',
 };
 
 function rangeDates(range: RangeId): [string, string] {

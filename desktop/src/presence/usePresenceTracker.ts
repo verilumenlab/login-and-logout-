@@ -1,20 +1,33 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { getConnectedWifiInfo } from '../api/ipc';
+import {
+  getConnectedWifiInfo,
+  onPowerEventQueued,
+  setPresenceSession,
+} from '../api/ipc';
 import { SessionExpiredError, pingBackend } from '../api/backend';
-import { DeviceInfo, TrackerStatus } from '../types';
-import { collectWifiEvents, flushQueue, lastSyncTime, pendingEventCount, queueAppEvent } from './tracker';
+import { DeviceInfo, PresenceEventIn, TrackerStatus, UserSession } from '../types';
+import {
+  collectWifiEvents,
+  enqueuePresenceEvent,
+  flushQueue,
+  ingestPowerEventsFromMain,
+  lastSyncTime,
+  pendingEventCount,
+  queueAppEvent,
+} from './tracker';
 
 const POLL_INTERVAL_MS = 30_000;
 
 /**
  * Runs automatic login/logout tracking while an employee is signed in.
- * `appLoginPending` queues an APP_LOGIN once (on sign-in or when the app starts with a saved session).
+ * Also consumes laptop power events (shutdown/sleep = logout, wake/boot = login).
  */
 export function usePresenceTracker(
   device: DeviceInfo | null,
   active: boolean,
-  onSessionExpired: () => void
+  onSessionExpired: () => void,
+  session: UserSession | null = null
 ) {
   const [status, setStatus] = useState<TrackerStatus>({
     isOnline: true,
@@ -31,6 +44,7 @@ export function usePresenceTracker(
     if (!device || running.current) return;
     running.current = true;
     try {
+      await ingestPowerEventsFromMain();
       const wifi = await getConnectedWifiInfo();
       if (!appLoginQueued.current) {
         appLoginQueued.current = true;
@@ -68,6 +82,29 @@ export function usePresenceTracker(
     }
   }, [device, onSessionExpired]);
 
+  // Tell Electron main whether a signed-in employee session exists (for powerMonitor attribution).
+  useEffect(() => {
+    if (!active || !device || !session) {
+      void setPresenceSession({ signedIn: false, deviceId: null, userId: null });
+      return;
+    }
+    void setPresenceSession({
+      signedIn: true,
+      deviceId: device.device_id,
+      userId: session.user_id,
+    });
+  }, [active, device, session]);
+
+  // Live power events while the window is open.
+  useEffect(() => {
+    if (!active || !device) return;
+    const unsubscribe = onPowerEventQueued((event: PresenceEventIn) => {
+      enqueuePresenceEvent(event);
+      void tick();
+    });
+    return unsubscribe;
+  }, [active, device, tick]);
+
   useEffect(() => {
     if (!active || !device) {
       appLoginQueued.current = false;
@@ -81,6 +118,7 @@ export function usePresenceTracker(
   /** Records the app sign-out and tries to deliver it before the tokens are cleared. */
   const recordAppLogout = useCallback(async () => {
     if (!device) return;
+    await setPresenceSession({ signedIn: false, deviceId: device.device_id, userId: null });
     const wifi = await getConnectedWifiInfo();
     await collectWifiEvents(device.device_id, device.os_type);
     queueAppEvent('APP_LOGOUT', device.device_id, wifi.is_wifi ? wifi.ssid : undefined);
@@ -91,6 +129,5 @@ export function usePresenceTracker(
     }
   }, [device]);
 
-  /** Incremented whenever the server confirms new events, so screens can refresh their data. */
   return { status, dataVersion: version, refresh: tick, recordAppLogout };
 }

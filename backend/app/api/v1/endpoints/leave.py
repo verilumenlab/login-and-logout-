@@ -60,8 +60,15 @@ router = APIRouter()
 
 
 def _is_hr(user: User) -> bool:
+    """HR and Department Manager share the same organization-wide leave authority."""
     role_name = user.role.name.strip().lower() if user.role else ""
-    return "hr" in role_name or role_name == "human resources"
+    return (
+        "hr" in role_name
+        or role_name == "human resources"
+        or "manager" in role_name
+        or "lead" in role_name
+        or "supervisor" in role_name
+    )
 
 
 async def _leave_employee_in_org(db: AsyncSession, leave_id: uuid.UUID, user: User) -> uuid.UUID:
@@ -455,17 +462,16 @@ async def review_leave_manager(
     """
     Tier 1 Workflow: Manager review.
     - Prohibits self-approval.
-    - Ensures manager is assigned to employee (unless admin, or HR for an employee with no manager).
+    - Assigned managers can review their reports; Admin / HR / Manager may review org-wide.
     - If REJECT: closes request immediately.
     - If APPROVE: marks manager approval, awaits HR.
     """
-    leave_employee_id = await _leave_employee_in_org(db, leave_id, current_user)
-    is_admin = bool(current_user.is_superuser or (current_user.role and "admin" in current_user.role.name.lower()))
-    if not is_admin and _is_hr(current_user):
-        has_manager = await db.scalar(
-            select(func.count(ManagerAssignment.id)).where(ManagerAssignment.employee_id == leave_employee_id)
-        )
-        is_admin = not has_manager
+    await _leave_employee_in_org(db, leave_id, current_user)
+    is_admin = bool(
+        current_user.is_superuser
+        or (current_user.role and "admin" in current_user.role.name.lower())
+        or _is_hr(current_user)
+    )
     try:
         leave = await LeaveEngine.process_manager_review(
             db=db,
@@ -683,7 +689,7 @@ async def list_team_leave_requests(
 ) -> list[LeaveResponse]:
     """
     Leave requests an approver may see, newest first.
-    HR / Admin: whole organization. Managers: their direct reports.
+    Admin / HR / Manager: whole organization.
     """
     stmt = (
         select(LeaveRequest)
@@ -699,12 +705,10 @@ async def list_team_leave_requests(
     )
     role_name = current_user.role.name.strip().lower() if current_user.role else ""
     if not (current_user.is_superuser or "admin" in role_name or _is_hr(current_user)):
-        if not any(word in role_name for word in ("manager", "lead", "supervisor")) or not current_user.employee_profile:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only managers, HR and administrators can view team leave")
-        team_ids = select(ManagerAssignment.employee_id).where(
-            ManagerAssignment.manager_id == current_user.employee_profile.id
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only managers, HR and administrators can view team leave",
         )
-        stmt = stmt.where(LeaveRequest.employee_id.in_(team_ids))
     if status_filter is not None:
         stmt = stmt.where(LeaveRequest.status == status_filter)
     leaves = (await db.execute(stmt)).scalars().all()
@@ -717,23 +721,7 @@ async def get_manager_leave_dashboard(
     current_user: User = Depends(require_permission("leave:requests:approve")),
     db: AsyncSession = Depends(get_db),
 ) -> LeaveDashboardSummary:
-    """Dashboard view for Managers: shows pending requests from assigned team members."""
-    # Find direct subordinates
-    sub_stmt = select(ManagerAssignment.employee_id).where(
-        ManagerAssignment.manager_id == current_emp.id
-    )
-    sub_res = await db.execute(sub_stmt)
-    sub_ids = list(sub_res.scalars().all())
-
-    if not sub_ids:
-        return LeaveDashboardSummary(
-            pending_manager_reviews=0,
-            pending_hr_reviews=0,
-            my_pending_requests=0,
-            my_approved_requests=0,
-            recent_requests=[],
-        )
-
+    """Dashboard for Managers: org-wide pending manager-step requests (same scope as HR)."""
     stmt = (
         select(LeaveRequest)
         .options(
@@ -743,7 +731,7 @@ async def get_manager_leave_dashboard(
             selectinload(LeaveRequest.documents),
         )
         .where(
-            LeaveRequest.employee_id.in_(sub_ids),
+            LeaveRequest.organization_id == current_user.organization_id,
             LeaveRequest.status == LeaveStatus.PENDING,
             LeaveRequest.manager_approval_status == ApprovalStatus.PENDING,
         )

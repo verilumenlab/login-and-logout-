@@ -1,66 +1,111 @@
 /**
- * Typed IPC bridge to the Tauri 2 native layer, with safe fallbacks when the UI runs in a plain browser.
+ * Typed IPC bridge to the Electron native layer, with safe fallbacks for plain browser preview.
  */
 
-import { DeviceInfo, NativeWifiEvent, WifiStatus } from '../types';
+import { DeviceInfo, NativeWifiEvent, PresenceEventIn, WifiStatus } from '../types';
 
+type PresenceSession = {
+  signedIn: boolean;
+  deviceId?: string | null;
+  userId?: string | null;
+};
+
+export type UpdateStatusPayload = {
+  state: string;
+  version?: string;
+  releaseNotes?: string | null;
+  mandatory?: boolean;
+  percent?: number;
+  transferred?: number;
+  total?: number;
+  message?: string;
+};
+
+type WorkpulseBridge = {
+  platform: 'electron';
+  saveSecureToken: (key: string, value: string) => Promise<void>;
+  getSecureToken: (key: string) => Promise<string | null>;
+  deleteSecureToken: (key: string) => Promise<void>;
+  getDeviceInfo: () => Promise<DeviceInfo>;
+  getConnectedWifi: () => Promise<WifiStatus>;
+  getWifiEvents: (since: string | null) => Promise<NativeWifiEvent[]>;
+  setPresenceSession: (session: PresenceSession) => Promise<void>;
+  drainPowerEvents: () => Promise<PresenceEventIn[]>;
+  peekPowerEvents: () => Promise<PresenceEventIn[]>;
+  onPowerEventQueued: (callback: (event: PresenceEventIn) => void) => () => void;
+  checkForUpdates?: () => Promise<unknown>;
+  installUpdateNow?: () => Promise<{ ok: boolean; error?: string }>;
+  getAppVersion?: () => Promise<string>;
+  setUpdateContext?: (ctx: { deviceId?: string | null; channel?: string }) => Promise<unknown>;
+  onUpdateStatus?: (callback: (payload: UpdateStatusPayload) => void) => () => void;
+};
+
+declare global {
+  interface Window {
+    workpulse?: WorkpulseBridge;
+  }
+}
+
+export function isElectronEnvironment(): boolean {
+  return typeof window !== 'undefined' && Boolean(window.workpulse);
+}
+
+/** @deprecated use isElectronEnvironment */
 export function isTauriEnvironment(): boolean {
-  return typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+  return isElectronEnvironment();
 }
 
-async function invokeNative<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  const { invoke } = await import('@tauri-apps/api/core');
-  return invoke<T>(command, args);
+function bridge(): WorkpulseBridge | null {
+  return typeof window !== 'undefined' ? window.workpulse || null : null;
 }
 
-// Browser preview only: tokens live in memory and are never written to disk.
 const memoryCredentialVault: Map<string, string> = new Map();
 
-/**
- * Operating system credential storage
- * Windows: Credential Manager, macOS: Keychain
- */
 export async function saveSecureToken(key: string, value: string): Promise<void> {
-  if (isTauriEnvironment()) {
+  const wp = bridge();
+  if (wp) {
     try {
-      await invokeNative('save_secure_token', { key, value });
+      await wp.saveSecureToken(key, value);
       return;
     } catch (e) {
-      console.warn('[IPC] Native credential store failed, using memory vault:', e);
+      console.warn('[IPC] Electron credential store failed, using memory vault:', e);
     }
   }
   memoryCredentialVault.set(key, value);
 }
 
 export async function getSecureToken(key: string): Promise<string | null> {
-  if (isTauriEnvironment()) {
+  const wp = bridge();
+  if (wp) {
     try {
-      const val = await invokeNative<string | null>('get_secure_token', { key });
+      const val = await wp.getSecureToken(key);
       if (val) return val;
     } catch (e) {
-      console.warn('[IPC] Native credential read failed, using memory vault:', e);
+      console.warn('[IPC] Electron credential read failed, using memory vault:', e);
     }
   }
   return memoryCredentialVault.get(key) || null;
 }
 
 export async function deleteSecureToken(key: string): Promise<void> {
-  if (isTauriEnvironment()) {
+  const wp = bridge();
+  if (wp) {
     try {
-      await invokeNative('delete_secure_token', { key });
+      await wp.deleteSecureToken(key);
     } catch (e) {
-      console.warn('[IPC] Native credential delete failed:', e);
+      console.warn('[IPC] Electron credential delete failed:', e);
     }
   }
   memoryCredentialVault.delete(key);
 }
 
 export async function getNativeDeviceInfo(): Promise<DeviceInfo> {
-  if (isTauriEnvironment()) {
+  const wp = bridge();
+  if (wp) {
     try {
-      return await invokeNative<DeviceInfo>('get_device_info');
+      return await wp.getDeviceInfo();
     } catch (e) {
-      console.warn('[IPC] get_device_info failed:', e);
+      console.warn('[IPC] getDeviceInfo failed:', e);
     }
   }
 
@@ -86,28 +131,105 @@ export async function getNativeDeviceInfo(): Promise<DeviceInfo> {
   };
 }
 
-/** Current Wi-Fi connection of this laptop (not connected / unknown outside the desktop app). */
 export async function getConnectedWifiInfo(): Promise<WifiStatus> {
-  if (isTauriEnvironment()) {
+  const wp = bridge();
+  if (wp) {
     try {
-      return await invokeNative<WifiStatus>('get_connected_wifi');
+      return await wp.getConnectedWifi();
     } catch (e) {
-      console.warn('[IPC] get_connected_wifi failed:', e);
+      console.warn('[IPC] getConnectedWifi failed:', e);
     }
   }
   return { ssid: '', bssid: '', is_wifi: false, timestamp: new Date().toISOString() };
 }
 
-/**
- * Wi-Fi connect/disconnect history recorded by the OS since `since` (RFC 3339).
- * Windows reads the WLAN-AutoConfig log; other platforms return an empty list.
- */
 export async function getWifiEvents(since: string | null): Promise<NativeWifiEvent[]> {
-  if (!isTauriEnvironment()) return [];
+  const wp = bridge();
+  if (!wp) return [];
   try {
-    return await invokeNative<NativeWifiEvent[]>('get_wifi_events', { since });
+    return await wp.getWifiEvents(since);
   } catch (e) {
-    console.warn('[IPC] get_wifi_events failed:', e);
+    console.warn('[IPC] getWifiEvents failed:', e);
     return [];
+  }
+}
+
+export async function setPresenceSession(session: PresenceSession): Promise<void> {
+  const wp = bridge();
+  if (!wp?.setPresenceSession) return;
+  try {
+    await wp.setPresenceSession(session);
+  } catch (e) {
+    console.warn('[IPC] setPresenceSession failed:', e);
+  }
+}
+
+export async function drainPowerEvents(): Promise<PresenceEventIn[]> {
+  const wp = bridge();
+  if (!wp?.drainPowerEvents) return [];
+  try {
+    return (await wp.drainPowerEvents()) || [];
+  } catch (e) {
+    console.warn('[IPC] drainPowerEvents failed:', e);
+    return [];
+  }
+}
+
+export function onPowerEventQueued(callback: (event: PresenceEventIn) => void): () => void {
+  const wp = bridge();
+  if (!wp?.onPowerEventQueued) return () => undefined;
+  return wp.onPowerEventQueued(callback);
+}
+
+export function onUpdateStatus(callback: (payload: UpdateStatusPayload) => void): () => void {
+  const wp = bridge();
+  if (!wp?.onUpdateStatus) return () => undefined;
+  return wp.onUpdateStatus(callback);
+}
+
+export async function checkForUpdates(): Promise<void> {
+  const wp = bridge();
+  if (!wp?.checkForUpdates) return;
+  try {
+    await wp.checkForUpdates();
+  } catch (e) {
+    console.warn('[IPC] checkForUpdates failed:', e);
+  }
+}
+
+export async function installUpdateNow(): Promise<boolean> {
+  const wp = bridge();
+  if (!wp?.installUpdateNow) return false;
+  try {
+    const res = await wp.installUpdateNow();
+    return Boolean(res?.ok);
+  } catch (e) {
+    console.warn('[IPC] installUpdateNow failed:', e);
+    return false;
+  }
+}
+
+export async function getAppVersion(): Promise<string> {
+  const wp = bridge();
+  if (wp?.getAppVersion) {
+    try {
+      return await wp.getAppVersion();
+    } catch {
+      // fall through
+    }
+  }
+  return '0.1.0';
+}
+
+export async function setUpdateContext(ctx: {
+  deviceId?: string | null;
+  channel?: string;
+}): Promise<void> {
+  const wp = bridge();
+  if (!wp?.setUpdateContext) return;
+  try {
+    await wp.setUpdateContext(ctx);
+  } catch (e) {
+    console.warn('[IPC] setUpdateContext failed:', e);
   }
 }

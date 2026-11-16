@@ -46,11 +46,11 @@ services:
           name: workpulse-redis
           property: connectionString
       - key: BACKEND_CORS_ORIGINS
-        value: '["https://magnificent-kangaroo-07d13a.netlify.app","tauri://localhost","http://tauri.localhost","https://tauri.localhost"]'
+        value: '["https://workloginandlogout-07d13a.netlify.app","http://localhost:3000","http://127.0.0.1:3000","tauri://localhost","http://tauri.localhost","https://tauri.localhost","http://localhost:1420"]'
       - key: BACKEND_CORS_ORIGIN_REGEX
-        value: ^https://([a-z0-9-]+--)?magnificent-kangaroo-07d13a\.netlify\.app$
+        value: ^https://([a-z0-9-]+--)?workloginandlogout-07d13a\.netlify\.app$
       - key: FRONTEND_BASE_URL
-        value: https://magnificent-kangaroo-07d13a.netlify.app
+        value: https://workloginandlogout-07d13a.netlify.app
       - key: FORWARDED_ALLOW_IPS
         value: "*" # Render only exposes the service through its proxy
       # First-run setup (app/bootstrap.py): creates the organization and the first administrator.

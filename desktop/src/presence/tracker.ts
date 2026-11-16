@@ -8,7 +8,7 @@
  * while the laptop is offline (which is exactly when Wi-Fi disconnects happen).
  */
 
-import { getConnectedWifiInfo, getWifiEvents, isTauriEnvironment } from '../api/ipc';
+import { drainPowerEvents, getConnectedWifiInfo, getWifiEvents, isElectronEnvironment } from '../api/ipc';
 import { HttpError, NetworkError, syncPresenceEvents } from '../api/backend';
 import { PresenceEventIn, PresenceEventType } from '../types';
 
@@ -85,13 +85,35 @@ export function queueAppEvent(type: Extract<PresenceEventType, 'APP_LOGIN' | 'AP
   ]);
 }
 
+/** Merge durable Electron power-queue events (shutdown/sleep/wake/boot) into the sync queue. */
+export async function ingestPowerEventsFromMain(): Promise<number> {
+  if (!isElectronEnvironment()) return 0;
+  const events = await drainPowerEvents();
+  if (!events.length) return 0;
+  enqueue(
+    events.map((e) => ({
+      client_event_id: e.client_event_id,
+      event_type: e.event_type,
+      occurred_at: e.occurred_at,
+      ssid: e.ssid ?? null,
+      bssid: e.bssid ?? null,
+      device_id: e.device_id ?? null,
+    }))
+  );
+  return events.length;
+}
+
+export function enqueuePresenceEvent(event: PresenceEventIn): void {
+  enqueue([event]);
+}
+
 /**
  * Reads Wi-Fi connect/disconnect events that happened since the last check and queues them.
  * Windows: from the OS WLAN log (includes connections made while the app was closed).
  * Other platforms: by comparing the current connection with the previous poll.
  */
 export async function collectWifiEvents(deviceId: string, osType: string): Promise<void> {
-  if (!isTauriEnvironment()) return;
+  if (!isElectronEnvironment()) return;
   const tag = shortDeviceTag(deviceId);
 
   if (osType === 'windows') {

@@ -14,22 +14,44 @@ import {
   ShieldCheck,
   Unlock,
 } from 'lucide-react';
-import { apiClient, Device } from '@/lib/api-client';
+import Link from 'next/link';
+import { apiClient, Device, ReleaseSummary } from '@/lib/api-client';
 
 export default function DeviceManagementPage() {
   const [loading, setLoading] = useState(true);
   const [devices, setDevices] = useState<Device[]>([]);
   const [search, setSearch] = useState('');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [publishedVersion, setPublishedVersion] = useState<string | null>(null);
 
   const fetchDevices = async () => {
     setLoading(true);
     try {
-      const data = await apiClient.listDevices().catch(() => []);
+      const [data, summary] = await Promise.all([
+        apiClient.listDevices().catch(() => [] as Device[]),
+        apiClient.getReleaseSummary('production').catch(() => null as ReleaseSummary | null),
+      ]);
       setDevices(data);
+      setPublishedVersion(summary?.current_published_version || null);
     } finally {
       setLoading(false);
     }
+  };
+
+  const isOutdated = (agentVersion: string) => {
+    if (!publishedVersion) return false;
+    const parse = (v: string) =>
+      v
+        .replace(/^v/, '')
+        .split('.')
+        .map((p) => parseInt(p, 10) || 0);
+    const a = parse(agentVersion || '0.0.0');
+    const b = parse(publishedVersion);
+    for (let i = 0; i < 3; i++) {
+      if ((a[i] || 0) < (b[i] || 0)) return true;
+      if ((a[i] || 0) > (b[i] || 0)) return false;
+    }
+    return false;
   };
 
   useEffect(() => {
@@ -72,7 +94,16 @@ export default function DeviceManagementPage() {
             Enrolled Workstation &amp; Device Management
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            Audit hardware fingerprints, inspect Tauri Desktop agent versions, and enforce cryptographic session revocation
+            Audit hardware fingerprints, inspect WorkPulse Employee agent versions, and enforce session revocation
+            {publishedVersion ? (
+              <>
+                {' '}
+                · Published app:{' '}
+                <Link href="/releases" className="text-blue-600 font-semibold">
+                  v{publishedVersion}
+                </Link>
+              </>
+            ) : null}
           </p>
         </div>
 
@@ -145,9 +176,16 @@ export default function DeviceManagementPage() {
                   <span className="text-slate-400">OS:</span>
                   <span>{dev.os_name}</span>
                 </div>
-                <div className="flex justify-between">
+                <div className="flex justify-between items-center gap-2">
                   <span className="text-slate-400">Agent:</span>
-                  <span className="text-blue-600 font-semibold">{dev.agent_version}</span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-blue-600 font-semibold">{dev.agent_version}</span>
+                    {isOutdated(dev.agent_version) && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                        Outdated
+                      </span>
+                    )}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">MAC:</span>

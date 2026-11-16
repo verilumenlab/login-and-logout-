@@ -335,11 +335,11 @@ async def manual_send_report(
     and dispatch it directly to configured recipient emails.
     """
     user_role = current_user.role.name.lower() if current_user.role else ""
-    is_admin_or_hr = any(r in user_role for r in ["admin", "super", "hr"])
+    is_admin_or_hr = any(r in user_role for r in ["admin", "super", "hr", "manager", "lead", "supervisor"])
     if not is_admin_or_hr:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied: Only Administrators and HR can manually dispatch consolidated reports.",
+            detail="Access denied: Only Administrators, HR and Managers can manually dispatch consolidated reports.",
         )
 
     if not payload.recipients:

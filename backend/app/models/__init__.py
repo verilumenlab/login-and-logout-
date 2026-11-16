@@ -71,6 +71,15 @@ from app.models.os_event import (
 )
 from app.models.organization import Organization
 from app.models.presence import PresenceAttendanceAction, PresenceEvent, PresenceEventType
+from app.models.release import (
+    ApplicationRelease,
+    ApplicationReleaseChannel,
+    ApplicationReleaseFile,
+    ApplicationUpdateEvent,
+    ApplicationUpdatePolicy,
+    EmployeeAppInstallation,
+    EmployeeUpdateHistory,
+)
 from app.models.reporting import (
     ReportFile,
     ReportJob,
@@ -181,4 +190,12 @@ __all__ = [
     # Security Extensions
     "PasswordResetToken",
     "LoginHistory",
+    # Application releases (Electron / Windows)
+    "ApplicationReleaseChannel",
+    "ApplicationRelease",
+    "ApplicationReleaseFile",
+    "ApplicationUpdatePolicy",
+    "EmployeeAppInstallation",
+    "EmployeeUpdateHistory",
+    "ApplicationUpdateEvent",
 ]

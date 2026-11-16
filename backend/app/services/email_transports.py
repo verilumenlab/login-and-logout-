@@ -118,28 +118,50 @@ class SMTPEmailTransport(BaseEmailTransport):
     ) -> None:
         self.host = host or settings.SMTP_HOST
         self.port = port or settings.SMTP_PORT
-        self.user = user or settings.SMTP_USER
-        self.password = password or settings.SMTP_PASSWORD
+        self.user = (user if user is not None else settings.SMTP_USER) or ""
+        # Google App Passwords are often pasted with spaces — strip them.
+        raw_password = password if password is not None else settings.SMTP_PASSWORD
+        self.password = "".join((raw_password or "").split())
         self.use_tls = use_tls if use_tls is not None else settings.SMTP_TLS
         self.use_ssl = use_ssl if use_ssl is not None else settings.SMTP_SSL
 
+    @staticmethod
+    def _bare_email(address: str) -> str:
+        """Extract address from 'Name <user@host>' or return the raw email."""
+        value = (address or "").strip()
+        if "<" in value and ">" in value:
+            return value.split("<", 1)[1].split(">", 1)[0].strip()
+        return value
+
     def _send_sync(
         self,
-        from_header: str,
+        envelope_from: str,
         to_email: str,
         msg: MIMEMultipart,
     ) -> str:
+        if not self.host:
+            raise RuntimeError("SMTP_HOST is not configured.")
+        if self.user and not self.password:
+            raise RuntimeError(
+                "SMTP_PASSWORD is empty. For Google Workspace use a 16-character App Password "
+                "(Google Account → Security → App passwords), not the normal login password."
+            )
+
         if self.use_ssl:
-            server = smtplib.SMTP_SSL(self.host, self.port, timeout=15)
+            server = smtplib.SMTP_SSL(self.host, self.port, timeout=30)
         else:
-            server = smtplib.SMTP(self.host, self.port, timeout=15)
+            server = smtplib.SMTP(self.host, self.port, timeout=30)
 
         try:
+            server.ehlo()
             if self.use_tls and not self.use_ssl:
                 server.starttls()
+                server.ehlo()
             if self.user and self.password:
                 server.login(self.user, self.password)
-            server.sendmail(from_header, [to_email], msg.as_string())
+            # Envelope sender must be a bare address; prefer authenticated mailbox for Gmail.
+            mail_from = self._bare_email(self.user) or self._bare_email(envelope_from)
+            server.sendmail(mail_from, [to_email], msg.as_string())
             msg_id = msg.get("Message-ID", f"smtp-{uuid.uuid4().hex[:12]}")
             return msg_id
         finally:
@@ -160,16 +182,16 @@ class SMTPEmailTransport(BaseEmailTransport):
         attachments: list[dict[str, Any]] | None = None,
     ) -> TransportSendResult:
         try:
-            from_addr = sender_email or settings.DEFAULT_FROM_EMAIL
+            from_addr = self._bare_email(sender_email or settings.DEFAULT_FROM_EMAIL)
             from_display = sender_name or settings.DEFAULT_FROM_NAME
-            from_header = f"{from_display} <{from_addr}>"
+            from_header = f"{from_display} <{from_addr}>" if from_display else from_addr
             to_header = f"{recipient_name} <{recipient_email}>" if recipient_name else recipient_email
 
             msg = MIMEMultipart("mixed")
             msg["Subject"] = subject
             msg["From"] = from_header
             msg["To"] = to_header
-            msg["Message-ID"] = f"<{uuid.uuid4()}@{self.host}>"
+            msg["Message-ID"] = f"<{uuid.uuid4()}@workpulse.local>"
 
             alt_part = MIMEMultipart("alternative")
             if body_text:

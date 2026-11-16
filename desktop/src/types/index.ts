@@ -36,7 +36,15 @@ export interface DeviceInfo {
 // Presence: app login/logout + laptop Wi-Fi connect/disconnect
 // ---------------------------------------------------------------------------
 
-export type PresenceEventType = 'APP_LOGIN' | 'APP_LOGOUT' | 'WIFI_CONNECTED' | 'WIFI_DISCONNECTED';
+export type PresenceEventType =
+  | 'APP_LOGIN'
+  | 'APP_LOGOUT'
+  | 'WIFI_CONNECTED'
+  | 'WIFI_DISCONNECTED'
+  | 'SYSTEM_SHUTDOWN'
+  | 'SYSTEM_SUSPEND'
+  | 'SYSTEM_RESUME'
+  | 'SYSTEM_STARTUP';
 export type AttendanceAction = 'CLOCK_IN' | 'CLOCK_OUT' | 'NONE';
 
 export interface PresenceEventIn {

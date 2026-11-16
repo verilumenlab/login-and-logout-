@@ -28,11 +28,24 @@ oauth2_scheme = OAuth2PasswordBearer(
 ROLE_ALIASES: dict[str, set[str]] = {
     "super admin": {"super admin", "super administrator"},
     "admin": {"admin", "administrator", "super admin", "super administrator"},
-    "hr": {"hr", "hr manager", "human resources", "admin", "administrator", "super admin", "super administrator"},
+    # Manager is treated as equal to HR for portal / org-wide access.
+    "hr": {
+        "hr",
+        "hr manager",
+        "human resources",
+        "manager",
+        "department manager",
+        "admin",
+        "administrator",
+        "super admin",
+        "super administrator",
+    },
     "manager": {
         "manager",
         "department manager",
         "team lead",
+        "hr",
+        "hr manager",
         "admin",
         "administrator",
         "super admin",

@@ -1,28 +1,88 @@
 {
-  "name": "enterprise-attendance-desktop",
+  "name": "workpulse-employee",
   "private": true,
   "version": "0.1.0",
+  "description": "WorkPulse Employee Windows desktop application",
+  "author": "Verilumen Lab",
+  "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "electron:dev": "concurrently -k \"vite\" \"wait-on http://127.0.0.1:1420 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:1420 electron .\"",
+    "electron:build": "npm run build && electron-builder --win nsis --x64",
     "tauri": "tauri"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.0.0",
-    "@tauri-apps/plugin-shell": "^2.0.0",
+    "electron-updater": "^6.8.11",
     "lucide-react": "^0.453.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.2",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "34.5.8",
+    "electron-builder": "25.1.8",
     "typescript": "^5.6.3",
-    "vite": "^5.4.9"
+    "vite": "^5.4.9",
+    "wait-on": "^8.0.2"
+  },
+  "build": {
+    "appId": "ai.verilumen.workpulse.employee",
+    "productName": "WorkPulse Employee",
+    "copyright": "Copyright © Verilumen Lab",
+    "electronVersion": "34.5.8",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json",
+      "build/icon.ico",
+      "build/icon.png",
+      "public/workpulse-logo.png",
+      "public/workpulse-mark.png"
+    ],
+    "extraMetadata": {
+      "main": "electron/main.cjs"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "WorkPulse-Employee-Setup-${version}.${ext}",
+      "signAndEditExecutable": false
+    },
+    "forceCodeSigning": false,
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "WorkPulse Employee",
+      "uninstallDisplayName": "WorkPulse Employee",
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "http://localhost:8000/api/v1/updates/windows/production"
+      }
+    ]
   }
 }
-

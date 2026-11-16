@@ -233,6 +233,74 @@ export interface Device {
   last_seen_at?: string | null;
 }
 
+export interface ReleaseFile {
+  id: string;
+  kind: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  sha256: string;
+}
+
+export interface ApplicationRelease {
+  id: string;
+  channel_name: string;
+  version: string;
+  build_number?: string | null;
+  release_notes?: string | null;
+  status: string;
+  os_name: string;
+  package_size: number;
+  sha256: string;
+  sha512?: string | null;
+  uploaded_at: string;
+  published_at?: string | null;
+  created_at: string;
+  files: ReleaseFile[];
+}
+
+export interface ReleaseSummary {
+  current_published_version?: string | null;
+  current_published_id?: string | null;
+  latest_uploaded_version?: string | null;
+  latest_uploaded_id?: string | null;
+  new_release_available: boolean;
+  channel: string;
+  registered_devices: number;
+  devices_needing_update: number;
+  successful_updates: number;
+  failed_updates: number;
+}
+
+export interface DeviceUpdateStatus {
+  device_id: string;
+  device_name: string;
+  device_identifier: string;
+  employee_id?: string | null;
+  agent_version: string;
+  installed_version?: string | null;
+  needs_update: boolean;
+  last_update_status?: string | null;
+  last_check_at?: string | null;
+  last_seen_at?: string | null;
+}
+
+export interface ReleaseActionResult {
+  id: string;
+  status: string;
+  message: string;
+}
+
+export interface UpdateEvent {
+  id: string;
+  event_type: string;
+  message?: string | null;
+  release_id?: string | null;
+  device_id?: string | null;
+  details_json?: Record<string, unknown> | null;
+  created_at: string;
+}
+
 export interface AttendanceDay {
   id: string;
   employee_id: string;
@@ -654,6 +722,47 @@ export class ApiClient {
     );
   }
 
+  /** Download weekly (Mon–Fri) or monthly combined HR attendance CSV. */
+  async downloadAttendanceCsv(period: 'weekly' | 'monthly', date: string): Promise<void> {
+    const endpoint = `/presence/export.csv?period=${period}&date=${encodeURIComponent(date)}`;
+    let response = await this.send(endpoint, { method: 'GET' });
+    if (response.status === 401 && this.getToken()) {
+      if (await this.refreshAccessToken()) {
+        response = await this.send(endpoint, { method: 'GET' });
+      }
+      if (response.status === 401) {
+        this.clearSession();
+        this.sessionExpiredHandler?.();
+        throw new ApiError('Your session has expired. Please sign in again.', 401);
+      }
+    }
+    if (!response.ok) {
+      const errorBody = await response.text();
+      let detail = errorBody;
+      try {
+        const parsed = JSON.parse(errorBody);
+        detail = parsed.detail || errorBody;
+      } catch {
+        /* keep text */
+      }
+      throw new ApiError(typeof detail === 'string' ? detail : 'Export failed', response.status);
+    }
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = /filename="([^"]+)"/i.exec(disposition);
+    const fallback =
+      period === 'weekly'
+        ? `Weekly_Attendance_${date}.csv`
+        : `Monthly_Attendance_${date}.csv`;
+    const filename = match?.[1] || fallback;
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   // --- Health ---
   async getHealth(): Promise<HealthStatus> {
     return this.request<HealthStatus>('/health');
@@ -785,6 +894,62 @@ export class ApiClient {
 
   async unblockDevice(deviceId: string): Promise<Device> {
     return this.request<Device>(`/devices/${deviceId}/unblock`, { method: 'POST' });
+  }
+
+  // --- Application Releases (Employee Desktop) ---
+  async getReleaseSummary(channel: string = 'production'): Promise<ReleaseSummary> {
+    return this.request<ReleaseSummary>(`/releases/summary?channel=${encodeURIComponent(channel)}`);
+  }
+
+  async listReleases(params: { channel?: string; status?: string } = {}): Promise<ApplicationRelease[]> {
+    const sp = new URLSearchParams();
+    if (params.channel) sp.append('channel', params.channel);
+    if (params.status) sp.append('status', params.status);
+    const qs = sp.toString();
+    return this.request<ApplicationRelease[]>(`/releases/${qs ? `?${qs}` : ''}`);
+  }
+
+  async getRelease(id: string): Promise<ApplicationRelease> {
+    return this.request<ApplicationRelease>(`/releases/${id}`);
+  }
+
+  async uploadRelease(formData: FormData): Promise<ApplicationRelease> {
+    return this.request<ApplicationRelease>('/releases/upload', {
+      method: 'POST',
+      body: formData,
+    });
+  }
+
+  async approveRelease(id: string): Promise<ReleaseActionResult> {
+    return this.request<ReleaseActionResult>(`/releases/${id}/approve`, { method: 'POST' });
+  }
+
+  async publishRelease(id: string): Promise<ReleaseActionResult> {
+    return this.request<ReleaseActionResult>(`/releases/${id}/publish`, { method: 'POST' });
+  }
+
+  async pauseRelease(id: string): Promise<ReleaseActionResult> {
+    return this.request<ReleaseActionResult>(`/releases/${id}/pause`, { method: 'POST' });
+  }
+
+  async cancelRelease(id: string): Promise<ReleaseActionResult> {
+    return this.request<ReleaseActionResult>(`/releases/${id}/cancel`, { method: 'POST' });
+  }
+
+  async rollbackRelease(id: string): Promise<ReleaseActionResult> {
+    return this.request<ReleaseActionResult>(`/releases/${id}/rollback`, { method: 'POST' });
+  }
+
+  async getReleaseCompliance(channel: string = 'production'): Promise<DeviceUpdateStatus[]> {
+    return this.request<DeviceUpdateStatus[]>(`/releases/compliance?channel=${encodeURIComponent(channel)}`);
+  }
+
+  async getReleaseDeviceStatus(releaseId: string): Promise<DeviceUpdateStatus[]> {
+    return this.request<DeviceUpdateStatus[]>(`/releases/${releaseId}/devices`);
+  }
+
+  async listReleaseEvents(limit: number = 50): Promise<UpdateEvent[]> {
+    return this.request<UpdateEvent[]>(`/releases/events?limit=${limit}`);
   }
 
   // --- Attendance ---

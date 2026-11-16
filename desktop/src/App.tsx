@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import './App.css';
 import { DeviceInfo, ScreenId, UserSession } from './types';
-import { getNativeDeviceInfo } from './api/ipc';
+import { getNativeDeviceInfo, setUpdateContext } from './api/ipc';
 import { clearLocalSession, getStoredUserSession, logoutUser } from './api/backend';
 import { bindQueueToUser } from './presence/tracker';
 import { usePresenceTracker } from './presence/usePresenceTracker';
 
 import { Navigation } from './components/Navigation';
+import { UpdateBanner } from './components/UpdateBanner';
 import { LoginScreen } from './screens/LoginScreen';
 import { DashboardScreen } from './screens/DashboardScreen';
 import { PresenceScreen } from './screens/PresenceScreen';
@@ -36,7 +37,8 @@ export default function App() {
   const { status, dataVersion, refresh, recordAppLogout } = usePresenceTracker(
     device,
     session !== null,
-    handleSessionExpired
+    handleSessionExpired,
+    session
   );
 
   const handleLogin = (newSession: UserSession) => {
@@ -44,6 +46,10 @@ export default function App() {
     setNotice(null);
     setScreen('dashboard');
     setSession(newSession);
+    void setUpdateContext({
+      deviceId: device?.device_id || localStorage.getItem('__device_id') || null,
+      channel: import.meta.env.VITE_RELEASE_CHANNEL || 'production',
+    });
   };
 
   const handleLogout = async () => {
@@ -71,6 +77,7 @@ export default function App() {
         onLogout={handleLogout}
         loggingOut={loggingOut}
       />
+      <UpdateBanner />
       <main className="app-main">
         {screen === 'dashboard' && <DashboardScreen session={session} dataVersion={dataVersion} />}
         {screen === 'presence' && <PresenceScreen tracker={status} dataVersion={dataVersion} onSyncNow={refresh} />}

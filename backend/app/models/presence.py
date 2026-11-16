@@ -28,9 +28,29 @@ class PresenceEventType(str, enum.Enum):
     APP_LOGOUT = "APP_LOGOUT"
     WIFI_CONNECTED = "WIFI_CONNECTED"
     WIFI_DISCONNECTED = "WIFI_DISCONNECTED"
+    SYSTEM_SHUTDOWN = "SYSTEM_SHUTDOWN"
+    SYSTEM_SUSPEND = "SYSTEM_SUSPEND"
+    SYSTEM_RESUME = "SYSTEM_RESUME"
+    SYSTEM_STARTUP = "SYSTEM_STARTUP"
 
 
-LOGIN_EVENT_TYPES = frozenset({PresenceEventType.APP_LOGIN, PresenceEventType.WIFI_CONNECTED})
+LOGIN_EVENT_TYPES = frozenset(
+    {
+        PresenceEventType.APP_LOGIN,
+        PresenceEventType.WIFI_CONNECTED,
+        PresenceEventType.SYSTEM_RESUME,
+        PresenceEventType.SYSTEM_STARTUP,
+    }
+)
+
+LOGOUT_EVENT_TYPES = frozenset(
+    {
+        PresenceEventType.APP_LOGOUT,
+        PresenceEventType.WIFI_DISCONNECTED,
+        PresenceEventType.SYSTEM_SHUTDOWN,
+        PresenceEventType.SYSTEM_SUSPEND,
+    }
+)
 
 
 class PresenceAttendanceAction(str, enum.Enum):

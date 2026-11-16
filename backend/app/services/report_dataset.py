@@ -18,9 +18,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.attendance import AttendanceDay, AttendanceEventType, AttendanceStatus
+from app.models.attendance import AttendanceDay, AttendanceEvent, AttendanceEventType, AttendanceStatus
 from app.models.employee import EmployeeProfile, EmploymentStatus, ManagerAssignment
 from app.models.leave import LeaveRequest, LeaveStatus
+from app.models.office import LocationVerification
 from app.models.os_event import OSSessionEvent
 from app.models.presence import PresenceEvent, PresenceEventType
 from app.models.schedule import Holiday
@@ -53,6 +54,47 @@ def _source_label(notes: str | None, source: Any) -> str:
     if text.startswith("auto-closed"):
         return "AUTO-CLOSED"
     return source.value if hasattr(source, "value") else str(source or "")
+
+
+def _gps_coords(event: AttendanceEvent | None) -> tuple[str, str]:
+    """Latitude/longitude from the location event linked to a clock-in/out, if any."""
+    if event is None:
+        return "", ""
+    verification = event.location_verification
+    if verification is None or verification.location_event is None:
+        return "", ""
+    loc = verification.location_event
+    return str(loc.latitude), str(loc.longitude)
+
+
+def _empty_attendance_fields(
+    *,
+    status: str,
+    scheduled_start: str = "",
+    leave_type: str = "",
+    location_status: str = "",
+    gps_latitude: str = "",
+    gps_longitude: str = "",
+) -> dict[str, Any]:
+    return {
+        "clock_in": "",
+        "clock_out": "",
+        "work_duration": "",
+        "gross_duration_hours": 0.0,
+        "break_duration_hours": 0.0,
+        "break_minutes": 0,
+        "net_duration_hours": 0.0,
+        "status": status,
+        "late_minutes": 0,
+        "scheduled_start": scheduled_start,
+        "location_status": location_status,
+        "logout_source": "",
+        "first_wifi_connected": "",
+        "wifi_networks": "",
+        "leave_type": leave_type,
+        "gps_latitude": gps_latitude,
+        "gps_longitude": gps_longitude,
+    }
 
 
 @dataclass
@@ -110,6 +152,8 @@ async def build_report_dataset(
     start_date: date,
     end_date: date,
     tz_name: str = "UTC",
+    *,
+    include_all_calendar_days: bool = False,
 ) -> ReportDataset:
     tz = _tz(tz_name)
     today_local = datetime.now(tz).date()
@@ -140,7 +184,11 @@ async def build_report_dataset(
     attendance_days = (
         await db.execute(
             select(AttendanceDay)
-            .options(selectinload(AttendanceDay.events))
+            .options(
+                selectinload(AttendanceDay.events)
+                .selectinload(AttendanceEvent.location_verification)
+                .selectinload(LocationVerification.location_event)
+            )
             .where(
                 AttendanceDay.organization_id == organization_id,
                 AttendanceDay.work_date >= start_date,
@@ -242,13 +290,15 @@ async def build_report_dataset(
             wifi_by_emp_date.setdefault((ev.employee_id, occurred.date()), []).append(ev)
 
     leave_weight: dict[tuple[uuid.UUID, date], float] = {}
+    leave_type_by_day: dict[tuple[uuid.UUID, date], str] = {}
     for lv in leaves:
         ident = identity.get(lv.employee_id)
         if ident is None:
             continue
+        leave_name = lv.leave_type.name if lv.leave_type else "Leave"
         ds.leaves_data.append({
             **ident,
-            "leave_type": lv.leave_type.name if lv.leave_type else "Leave",
+            "leave_type": leave_name,
             "created_at": str(local(getattr(lv, "created_at", None)).date()) if getattr(lv, "created_at", None) else "",
             "start_date": str(lv.start_date),
             "end_date": str(lv.end_date),
@@ -262,6 +312,7 @@ async def build_report_dataset(
             d = max(lv.start_date, start_date)
             while d <= min(lv.end_date, end_date):
                 leave_weight[(lv.employee_id, d)] = 0.5 if lv.is_half_day else 1.0
+                leave_type_by_day[(lv.employee_id, d)] = leave_name
                 d += timedelta(days=1)
 
     att_by_emp: dict[uuid.UUID, dict[date, AttendanceDay]] = {}
@@ -274,37 +325,49 @@ async def build_report_dataset(
         schedule = e.work_schedule
         weekdays = schedule.working_days if (schedule and schedule.working_days) else DEFAULT_WORKING_WEEKDAYS
         scheduled_start = schedule.shift_start_time.strftime("%H:%M") if schedule else ""
+        calendar_dates = [
+            start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)
+        ]
         working_dates = [
-            start_date + timedelta(days=i)
-            for i in range((end_date - start_date).days + 1)
-            if (start_date + timedelta(days=i)).isoweekday() in weekdays
-            and (start_date + timedelta(days=i)) not in holidays
+            d for d in calendar_dates if d.isoweekday() in weekdays and d not in holidays
         ]
         days = att_by_emp.get(e.id, {})
         worked_days = {d: a for d, a in days.items() if a.shift_start is not None}
+        base_dates = calendar_dates if include_all_calendar_days else working_dates
 
-        for work_date in sorted(set(worked_days) | {d for d in working_dates if d <= today_local}):
+        for work_date in sorted(set(worked_days) | {d for d in base_dates if d <= today_local}):
             a = worked_days.get(work_date)
+            day_leave = leave_type_by_day.get((e.id, work_date), "")
             if a is None:
                 if leave_weight.get((e.id, work_date), 0.0) >= 1.0:
+                    ds.attendance_logs.append({
+                        **ident,
+                        "work_date": str(work_date),
+                        **_empty_attendance_fields(
+                            status="ON_LEAVE",
+                            scheduled_start=scheduled_start,
+                            leave_type=day_leave or "Leave",
+                        ),
+                    })
+                    continue
+                if work_date in holidays:
+                    ds.attendance_logs.append({
+                        **ident,
+                        "work_date": str(work_date),
+                        **_empty_attendance_fields(status="HOLIDAY", scheduled_start=scheduled_start),
+                    })
+                    continue
+                if work_date.isoweekday() not in weekdays:
+                    ds.attendance_logs.append({
+                        **ident,
+                        "work_date": str(work_date),
+                        **_empty_attendance_fields(status="WEEKEND", scheduled_start=scheduled_start),
+                    })
                     continue
                 ds.attendance_logs.append({
                     **ident,
                     "work_date": str(work_date),
-                    "clock_in": "",
-                    "clock_out": "",
-                    "work_duration": "",
-                    "gross_duration_hours": 0.0,
-                    "break_duration_hours": 0.0,
-                    "break_minutes": 0,
-                    "net_duration_hours": 0.0,
-                    "status": "ABSENT",
-                    "late_minutes": 0,
-                    "scheduled_start": scheduled_start,
-                    "location_status": "",
-                    "logout_source": "",
-                    "first_wifi_connected": "",
-                    "wifi_networks": "",
+                    **_empty_attendance_fields(status="ABSENT", scheduled_start=scheduled_start),
                 })
                 ds.exceptions_data.append({
                     **ident,
@@ -325,6 +388,13 @@ async def build_report_dataset(
             break_min = a.total_break_minutes or 0
             wifi_events = wifi_by_emp_date.get((e.id, work_date), [])
             logout_source = "" if still_open else (_source_label(last_out.notes, last_out.source) if last_out else "")
+            gps_lat, gps_lng = _gps_coords(first_in)
+            if not gps_lat and last_out is not None:
+                gps_lat, gps_lng = _gps_coords(last_out)
+            status_value = a.status.value
+            leave_label = day_leave
+            if status_value == AttendanceStatus.ON_LEAVE.value and not leave_label:
+                leave_label = "Leave"
 
             ds.attendance_logs.append({
                 **ident,
@@ -336,13 +406,16 @@ async def build_report_dataset(
                 "break_duration_hours": round(break_min / 60.0, 2),
                 "break_minutes": break_min,
                 "net_duration_hours": round(net_min / 60.0, 2),
-                "status": a.status.value,
+                "status": status_value,
                 "late_minutes": a.late_minutes or 0,
                 "scheduled_start": scheduled_start,
                 "location_status": _source_label(first_in.notes, first_in.source) if first_in else "",
                 "logout_source": logout_source,
                 "first_wifi_connected": hhmm(wifi_events[0].occurred_at) if wifi_events else "",
                 "wifi_networks": ", ".join(dict.fromkeys(ev.ssid for ev in wifi_events if ev.ssid)),
+                "leave_type": leave_label,
+                "gps_latitude": gps_lat,
+                "gps_longitude": gps_lng,
             })
 
             missing_logout = logout_source == "AUTO-CLOSED" or a.is_missing_checkout or (

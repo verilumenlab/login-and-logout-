@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { AlertCircle, CheckCircle2, Eye, EyeOff, Laptop, Loader2, Lock, Mail, ShieldCheck } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Eye, EyeOff, Laptop, Loader2, Lock, Mail } from 'lucide-react';
 import { apiClient } from '@/lib/api-client';
 import { normalizeRole, useRole, UserRole } from '@/components/RoleContext';
+import { BrandLogo } from '@/components/BrandLogo';
 
 interface DemoAccount {
   role: UserRole;
@@ -70,12 +71,12 @@ export default function LoginPage() {
   return (
     <div className="min-h-[75vh] flex items-center justify-center">
       <div className="max-w-md w-full space-y-6 bg-white dark:bg-slate-900 p-8 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800">
-        <div className="text-center">
-          <div className="mx-auto h-12 w-12 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white shadow-md">
-            <ShieldCheck className="h-6 w-6" />
+        <div className="text-center space-y-3">
+          <div className="flex justify-center">
+            <BrandLogo href={null} variant="full" size="md" showTagline={false} />
           </div>
-          <h1 className="mt-4 text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Sign in to WorkPulse</h1>
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">For administrators, HR and managers</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Sign in to WorkPulse</h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400">For administrators, HR and managers</p>
         </div>
 
         <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-amber-800 dark:text-amber-300 text-xs flex items-start gap-2">

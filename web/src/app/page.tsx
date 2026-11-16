@@ -104,12 +104,7 @@ export default function Home() {
           absent: b.counts.not_logged_in,
         }))
       );
-      setPendingLeaves(
-        leaves.filter((l) =>
-          l.status === 'PENDING' &&
-          (role === 'MANAGER' ? l.manager_approval_status === 'PENDING' : true)
-        )
-      );
+      setPendingLeaves(leaves.filter((l) => l.status === 'PENDING'));
 
       if (role === 'ADMIN') {
         const [emps, depts, offices, devices] = await Promise.all([
@@ -147,7 +142,7 @@ export default function Home() {
     .slice(0, 8);
   const notLoggedIn = (today?.rows ?? []).filter((r) => r.status === 'NOT_LOGGED_IN').slice(0, 8);
   const weekMax = Math.max(1, ...week.map((d) => d.present + d.onLeave + d.absent));
-  const scopeWord = role === 'MANAGER' ? 'team' : 'organization';
+  const scopeWord = 'organization';
 
   return (
     <div className="space-y-6">
@@ -178,7 +173,7 @@ export default function Home() {
         <StatCard
           label="Logged in now"
           value={counts?.logged_in ?? '—'}
-          hint={counts ? `of ${counts.total} ${role === 'MANAGER' ? 'team members' : 'employees'}` : undefined}
+          hint={counts ? `of ${counts.total} employees` : undefined}
           icon={LogIn}
           tone="text-emerald-600"
           href="/presence"

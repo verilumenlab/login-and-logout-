@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, LogIn, RefreshCw, Search, Wifi } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, ChevronLeft, ChevronRight, Download, LogIn, RefreshCw, Search, Wifi } from 'lucide-react';
 import { apiClient, TeamPresenceResponse, TeamPresenceRow, TeamPresenceStatus } from '@/lib/api-client';
 import { useRole } from '@/components/RoleContext';
 import { formatDuration, formatTime, localDateInput, shiftDate } from '@/lib/format';
@@ -26,31 +26,13 @@ const STATUS_META: Record<TeamPresenceStatus, { label: string; badge: string }> 
 };
 
 type Filter = 'ALL' | TeamPresenceStatus;
+type ExportPeriod = 'weekly' | 'monthly';
 
 function liveMinutes(row: TeamPresenceRow): number {
   if (row.status === 'LOGGED_IN' && row.first_login) {
     return (Date.now() - new Date(row.first_login).getTime()) / 60000;
   }
   return row.worked_minutes;
-}
-
-function toCsv(data: TeamPresenceResponse): string {
-  const header = ['Date', 'Code', 'Name', 'Department', 'Status', 'Login', 'Logout', 'Hours', 'First Wi-Fi connect', 'Wi-Fi networks'];
-  const lines = data.rows.map((r) => [
-    data.work_date,
-    r.employee_code,
-    r.full_name,
-    r.department_name ?? '',
-    STATUS_META[r.status].label + (r.leave_type_name ? ` (${r.leave_type_name})` : ''),
-    formatTime(r.first_login),
-    r.status === 'LOGGED_IN' ? 'Still logged in' : formatTime(r.last_logout),
-    r.first_login ? formatDuration(liveMinutes(r)) : '',
-    formatTime(r.first_wifi_connected_at),
-    r.wifi_networks.join(' / '),
-  ]);
-  return [header, ...lines]
-    .map((cols) => cols.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','))
-    .join('\r\n');
 }
 
 export default function PresencePage() {
@@ -62,6 +44,9 @@ export default function PresencePage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('ALL');
   const [search, setSearch] = useState('');
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exporting, setExporting] = useState<ExportPeriod | null>(null);
+  const exportRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -82,6 +67,17 @@ export default function PresencePage() {
     return () => clearInterval(timer);
   }, [load, date, today]);
 
+  useEffect(() => {
+    if (!exportOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) {
+        setExportOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [exportOpen]);
+
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return (data?.rows ?? []).filter(
@@ -94,19 +90,21 @@ export default function PresencePage() {
     );
   }, [data, filter, search]);
 
-  const exportCsv = () => {
-    if (!data) return;
-    const blob = new Blob([toCsv(data)], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `login-logout-${data.work_date}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const exportAttendance = async (period: ExportPeriod) => {
+    setExporting(period);
+    setExportOpen(false);
+    try {
+      await apiClient.downloadAttendanceCsv(period, date);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not export CSV');
+    } finally {
+      setExporting(null);
+    }
   };
 
   const tiles: { id: Filter; label: string; value: number; tone: string }[] = [
-    { id: 'ALL', label: role === 'MANAGER' ? 'Team members' : 'Employees', value: data?.counts.total ?? 0, tone: 'text-slate-900 dark:text-slate-100' },
+    { id: 'ALL', label: 'Employees', value: data?.counts.total ?? 0, tone: 'text-slate-900 dark:text-slate-100' },
     { id: 'LOGGED_IN', label: 'Logged in now', value: data?.counts.logged_in ?? 0, tone: 'text-emerald-600' },
     { id: 'LOGGED_OUT', label: 'Logged out', value: data?.counts.logged_out ?? 0, tone: 'text-slate-600 dark:text-slate-300' },
     { id: 'ON_LEAVE', label: 'On leave', value: data?.counts.on_leave ?? 0, tone: 'text-amber-600' },
@@ -123,7 +121,7 @@ export default function PresencePage() {
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
             {data?.scope === 'TEAM' ? 'Your direct reports. ' : 'All employees. '}
             Login is the first desktop-app sign-in or laptop Wi-Fi connection; logout is the last sign-out or Wi-Fi
-            disconnection.
+            disconnection. Export weekly (Mon–Fri) or monthly attendance CSV from the selected date.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -158,13 +156,35 @@ export default function PresencePage() {
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          <button
-            onClick={exportCsv}
-            disabled={!data || data.rows.length === 0}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold disabled:opacity-50"
-          >
-            <Download className="w-3.5 h-3.5" /> Export CSV
-          </button>
+          <div className="relative" ref={exportRef}>
+            <button
+              onClick={() => setExportOpen((o) => !o)}
+              disabled={!!exporting}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold disabled:opacity-50"
+            >
+              <Download className={`w-3.5 h-3.5 ${exporting ? 'animate-pulse' : ''}`} />
+              {exporting ? 'Exporting…' : 'Export'}
+              <ChevronDown className="w-3.5 h-3.5 opacity-80" />
+            </button>
+            {exportOpen && (
+              <div className="absolute right-0 mt-1 z-20 w-64 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg py-1">
+                <button
+                  onClick={() => exportAttendance('weekly')}
+                  className="w-full text-left px-3 py-2.5 text-xs hover:bg-slate-50 dark:hover:bg-slate-800"
+                >
+                  <div className="font-semibold text-slate-900 dark:text-slate-100">Weekly CSV</div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">Mon–Fri of selected week</div>
+                </button>
+                <button
+                  onClick={() => exportAttendance('monthly')}
+                  className="w-full text-left px-3 py-2.5 text-xs hover:bg-slate-50 dark:hover:bg-slate-800"
+                >
+                  <div className="font-semibold text-slate-900 dark:text-slate-100">Monthly CSV</div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">Full calendar month</div>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
