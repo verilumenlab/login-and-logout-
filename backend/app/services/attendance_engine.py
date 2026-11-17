@@ -84,6 +84,83 @@ def ensure_utc(dt: datetime | None) -> datetime | None:
     return dt.astimezone(UTC)
 
 
+def org_zone(tz_name: str | None = None):
+    """Resolve organization timezone (default Asia/Kolkata)."""
+    from zoneinfo import ZoneInfo
+
+    try:
+        return ZoneInfo(tz_name or "Asia/Kolkata")
+    except Exception:
+        return ZoneInfo("UTC")
+
+
+def local_day_bounds(work_date: date, tz_name: str | None = None) -> tuple[datetime, datetime]:
+    """UTC window covering one local calendar day in the org timezone."""
+    tz = org_zone(tz_name)
+    start_local = datetime.combine(work_date, time.min, tzinfo=tz)
+    end_local = datetime.combine(work_date + timedelta(days=1), time.min, tzinfo=tz)
+    return start_local.astimezone(UTC), end_local.astimezone(UTC)
+
+
+def local_work_date(dt: datetime, tz_name: str | None = None) -> date:
+    """Calendar date of a timestamp in the organization timezone."""
+    utc = ensure_utc(dt) or datetime.now(UTC)
+    return utc.astimezone(org_zone(tz_name)).date()
+
+
+def _paired_work_minutes(
+    sorted_events: list,
+    *,
+    day_start: datetime,
+    day_end: datetime,
+    now: datetime,
+) -> tuple[datetime | None, datetime | None, int, bool]:
+    """
+    Walk CLOCK_IN / CLOCK_OUT in order and sum only time that falls inside [day_start, day_end).
+    Prevents overnight open sessions from inflating a single day's hours toward ~24h.
+    """
+    open_in: datetime | None = None
+    first_in: datetime | None = None
+    last_out: datetime | None = None
+    total = 0
+    still_open = False
+
+    def _clip(start: datetime, end: datetime) -> int:
+        s = max(start, day_start)
+        e = min(end, day_end, now)
+        if e <= s:
+            return 0
+        return max(0, int((e - s).total_seconds() // 60))
+
+    for ev in sorted_events:
+        ts = ensure_utc(ev.timestamp)
+        if ts is None:
+            continue
+        if is_clock_in(ev.event_type):
+            if open_in is None:
+                open_in = ts
+                if first_in is None:
+                    first_in = ts
+        elif is_clock_out(ev.event_type) and open_in is not None:
+            total += _clip(open_in, ts)
+            last_out = ts
+            open_in = None
+
+    if open_in is not None:
+        # Session still open: credit only through end of this work day (or now if earlier).
+        end_cap = min(now, day_end)
+        if now >= day_end:
+            # Past the work day — treat as missing checkout closed at day end.
+            total += _clip(open_in, day_end)
+            last_out = last_out or (day_end - timedelta(seconds=1))
+            still_open = False
+        else:
+            total += _clip(open_in, end_cap)
+            still_open = True
+
+    return first_in, last_out, total, still_open
+
+
 def is_overnight_schedule(schedule: WorkSchedule | None) -> bool:
     """Returns True if the schedule spans midnight (e.g. 22:00 to 06:00)."""
     if not schedule or not schedule.shift_start_time or not schedule.shift_end_time:
@@ -109,20 +186,24 @@ def calculate_schedule_expected_minutes(schedule: WorkSchedule | None) -> int:
 def determine_work_date_for_clock_in(
     clock_in_time: datetime,
     schedule: WorkSchedule | None,
+    tz_name: str | None = None,
 ) -> date:
     """
-    Determines the canonical work_date for a clock-in timestamp.
+    Determines the canonical work_date for a clock-in timestamp in the org timezone.
     Handles overnight shifts: if an overnight shift started yesterday (e.g. 22:00 yesterday to 06:00 today),
     and clock-in occurs past midnight in the early morning (e.g. 01:00 or 02:00), it belongs to yesterday's shift.
     """
     clock_in_utc = ensure_utc(clock_in_time) or datetime.now(UTC)
-    target_date = clock_in_utc.date()
+    target_date = local_work_date(clock_in_utc, tz_name)
     if not schedule or not is_overnight_schedule(schedule):
         return target_date
 
     # Overnight shift: e.g. start at 22:00, end at 06:00
     # If clocking in between 00:00 and (end_time + 2 hours), it belongs to yesterday's shift!
-    cutoff_dt = ensure_utc(datetime.combine(target_date, schedule.shift_end_time)) + timedelta(hours=2)
+    tz = org_zone(tz_name)
+    cutoff_dt = datetime.combine(target_date, schedule.shift_end_time, tzinfo=tz).astimezone(UTC) + timedelta(
+        hours=2
+    )
 
     if clock_in_utc <= cutoff_dt:
         return target_date - timedelta(days=1)
@@ -243,65 +324,55 @@ def calculate_daily_attendance(
     # 3. Process Work from Home (WFH) flag
     is_wfh = any(e.is_wfh for e in sorted_events)
 
-    # 4. Filter clock-ins and clock-outs
-    clock_ins = [e for e in sorted_events if is_clock_in(e.event_type)]
-    clock_outs = [e for e in sorted_events if is_clock_out(e.event_type)]
+    # 4. Pair clock-ins/outs and clamp to the local work-day window (stops ~24h overnight bugs).
+    day_start, day_end = local_day_bounds(work_date)
+    first_clock_in, last_clock_out, paired_minutes, session_still_open = _paired_work_minutes(
+        sorted_events, day_start=day_start, day_end=day_end, now=now
+    )
 
-    first_clock_in = ensure_utc(clock_ins[0].timestamp) if clock_ins else None
-    last_clock_out = ensure_utc(clock_outs[-1].timestamp) if clock_outs else None
-
-    # 5. Calculate break durations
+    # 5. Calculate break durations (also clipped to the work day)
     total_break_minutes = 0
     total_unpaid_break_minutes = 0
 
     for b in sorted_breaks:
         b_start = ensure_utc(b.start_time)
         b_end = ensure_utc(b.end_time)
-        if b_end and b_start:
-            dur = max(0, int((b_end - b_start).total_seconds() / 60))
-        elif first_clock_in and not last_clock_out and b_start:
-            # Active ongoing break
-            dur = max(0, int((now - b_start).total_seconds() / 60))
-        else:
-            dur = 0
-
+        if b_start is None:
+            continue
+        if b_end is None and session_still_open:
+            b_end = min(now, day_end)
+        if b_end is None:
+            continue
+        s = max(b_start, day_start)
+        e = min(b_end, day_end, now)
+        dur = max(0, int((e - s).total_seconds() / 60)) if e > s else 0
         total_break_minutes += dur
         if not b.is_paid:
             total_unpaid_break_minutes += dur
 
-    # 6. Calculate Gross & Net Working Minutes
-    total_work_minutes = 0
+    # 6. Net working minutes from paired sessions within the day
+    total_work_minutes = max(0, paired_minutes - total_unpaid_break_minutes)
     is_missing_checkout = False
 
-    if first_clock_in:
-        if last_clock_out and last_clock_out >= first_clock_in:
-            # Shift completed
-            gross_seconds = (last_clock_out - first_clock_in).total_seconds()
-            gross_minutes = int(gross_seconds / 60)
-            total_work_minutes = max(0, gross_minutes - total_unpaid_break_minutes)
-        else:
-            # Clocked in without clock-out
-            # Check if shift has completed based on schedule
-            scheduled_end_dt: datetime | None = None
-            if schedule and schedule.shift_end_time:
-                end_day = work_date + timedelta(days=1) if is_overnight else work_date
-                scheduled_end_dt = ensure_utc(datetime.combine(end_day, schedule.shift_end_time))
-
-            if scheduled_end_dt and now > scheduled_end_dt + timedelta(hours=2):
-                is_missing_checkout = True
-                notes.append("Missing clock-out detected past scheduled shift end")
-                # Credit up to scheduled end
-                gross_minutes = max(0, int((scheduled_end_dt - first_clock_in).total_seconds() / 60))
-                total_work_minutes = max(0, gross_minutes - total_unpaid_break_minutes)
-            else:
-                # Live ongoing shift
-                gross_minutes = max(0, int((now - first_clock_in).total_seconds() / 60))
-                total_work_minutes = max(0, gross_minutes - total_unpaid_break_minutes)
+    if first_clock_in and session_still_open:
+        scheduled_end_dt: datetime | None = None
+        if schedule and schedule.shift_end_time:
+            end_day = work_date + timedelta(days=1) if is_overnight else work_date
+            scheduled_end_dt = datetime.combine(
+                end_day, schedule.shift_end_time, tzinfo=org_zone()
+            ).astimezone(UTC)
+        if (scheduled_end_dt and now > scheduled_end_dt + timedelta(hours=2)) or now >= day_end:
+            is_missing_checkout = True
+            notes.append("Missing clock-out detected past scheduled shift / day end")
+    elif first_clock_in and last_clock_out and last_clock_out < first_clock_in:
+        notes.append("Corrected inverted login/logout timestamps using session pairing")
 
     # 7. Late Arrival Calculation
     late_minutes = 0
     if first_clock_in and schedule and schedule.shift_start_time:
-        scheduled_start_dt = ensure_utc(datetime.combine(work_date, schedule.shift_start_time))
+        scheduled_start_dt = datetime.combine(
+            work_date, schedule.shift_start_time, tzinfo=org_zone()
+        ).astimezone(UTC)
         grace_dt = scheduled_start_dt + timedelta(minutes=flexible_minutes)
 
         if first_clock_in > grace_dt:
@@ -312,7 +383,9 @@ def calculate_daily_attendance(
     early_departure_minutes = 0
     if last_clock_out and schedule and schedule.shift_end_time:
         end_day = work_date + timedelta(days=1) if is_overnight else work_date
-        scheduled_end_dt = ensure_utc(datetime.combine(end_day, schedule.shift_end_time))
+        scheduled_end_dt = datetime.combine(
+            end_day, schedule.shift_end_time, tzinfo=org_zone()
+        ).astimezone(UTC)
         if last_clock_out < scheduled_end_dt:
             early_departure_minutes = max(0, int((scheduled_end_dt - last_clock_out).total_seconds() / 60))
             notes.append(f"Early departure: {early_departure_minutes} minutes before scheduled end")

@@ -2,8 +2,12 @@
 Employee Presence Engine
 
 Turns desktop-agent signals into attendance:
-- LOGIN  = earliest of (app login, laptop Wi-Fi connected)  -> opens a session (clock-in)
-- LOGOUT = latest of (app logout, laptop Wi-Fi disconnected) -> closes the session (clock-out)
+- LOGIN  = earliest of (app login, office Wi-Fi connected)  -> opens a session (clock-in)
+- LOGOUT = latest of (app logout, office Wi-Fi disconnected) -> closes the session (clock-out)
+
+Wi-Fi connect/disconnect only affects attendance when the SSID is a trusted office
+network (Offices & Wi-Fi). Home / personal Wi-Fi is stored for audit but ignored
+for clock-in/out — important for employees on personal laptops.
 
 Every raw signal is stored as a PresenceEvent so the employee and HR can see exactly
 when the app was used and when the laptop joined or left a Wi-Fi network.
@@ -31,6 +35,7 @@ from app.models.attendance import (
 from app.models.auth import Role, User
 from app.models.employee import EmployeeProfile, EmploymentStatus
 from app.models.leave import LeaveRequest, LeaveStatus
+from app.models.office import Office, OfficeNetwork
 from app.models.presence import (
     AUDIT_ONLY_PRESENCE_EVENT_TYPES,
     LOGIN_EVENT_TYPES,
@@ -53,12 +58,22 @@ from app.services.attendance_engine import (
     determine_work_date_for_clock_in,
     ensure_utc,
     is_clock_in,
+    local_day_bounds,
+    local_work_date,
     recalculate_attendance_day,
 )
 
 MAX_EVENT_AGE = timedelta(days=7)
 MAX_CLOCK_SKEW = timedelta(minutes=5)
 DEFAULT_WORKING_WEEKDAYS = [1, 2, 3, 4, 5]
+_WIFI_ATTENDANCE_TYPES = frozenset(
+    {
+        PresenceEventType.WIFI_CONNECTED,
+        PresenceEventType.WIFI_DISCONNECTED,
+        PresenceEventType.WIFI_CONNECTED.value,
+        PresenceEventType.WIFI_DISCONNECTED.value,
+    }
+)
 
 
 def _attendance_client_event_id(employee_id: uuid.UUID, client_event_id: str) -> str:
@@ -178,6 +193,34 @@ def _wifi_display_from_events(events: list[PresenceEvent]) -> tuple[datetime | N
     return None, []
 
 
+async def _office_ssids(db: AsyncSession, organization_id: uuid.UUID) -> set[str]:
+    """Active trusted office Wi-Fi names for the organization (case-insensitive)."""
+    rows = (
+        await db.execute(
+            select(OfficeNetwork.ssid)
+            .join(Office, OfficeNetwork.office_id == Office.id)
+            .where(
+                Office.organization_id == organization_id,
+                Office.is_active.is_(True),
+                OfficeNetwork.is_active.is_(True),
+                OfficeNetwork.ssid.is_not(None),
+            )
+        )
+    ).scalars().all()
+    return {str(ssid).strip().casefold() for ssid in rows if ssid and str(ssid).strip()}
+
+
+def _is_wifi_attendance_event(event_type: object) -> bool:
+    val = event_type.value if hasattr(event_type, "value") else event_type
+    return val in _WIFI_ATTENDANCE_TYPES
+
+
+def _ssid_is_office(ssid: str | None, office_ssids: set[str]) -> bool:
+    if not ssid or not office_ssids:
+        return False
+    return ssid.strip().casefold() in office_ssids
+
+
 async def record_presence_event(
     db: AsyncSession,
     employee: EmployeeProfile,
@@ -216,7 +259,13 @@ async def record_presence_event(
     open_session = await _open_session(db, employee.id)
     event_work_date = determine_work_date_for_clock_in(occurred_at, employee.work_schedule)
 
-    if event.event_type in LOGIN_EVENT_TYPES:
+    # Home / personal Wi-Fi must not clock in or out — only trusted office SSIDs.
+    wifi_counts_for_attendance = True
+    if _is_wifi_attendance_event(event.event_type):
+        office_ssids = await _office_ssids(db, employee.organization_id)
+        wifi_counts_for_attendance = _ssid_is_office(event.ssid, office_ssids)
+
+    if wifi_counts_for_attendance and event.event_type in LOGIN_EVENT_TYPES:
         if open_session is not None and open_session[0].work_date < event_work_date:
             # Previous day never logged out (e.g. laptop shut down offline): close it at the last signal we saw.
             stale_day, last_in = open_session
@@ -255,7 +304,7 @@ async def record_presence_event(
     elif event.event_type in AUDIT_ONLY_PRESENCE_EVENT_TYPES:
         # Sleep/wake are audited only; automatic breaks track the away gap.
         action = PresenceAttendanceAction.NONE
-    elif event.event_type in LOGOUT_EVENT_TYPES:
+    elif wifi_counts_for_attendance and event.event_type in LOGOUT_EVENT_TYPES:
         if open_session is not None:
             if occurred_at >= open_session[1]:
                 await _add_attendance_event(
@@ -301,7 +350,109 @@ async def is_logged_in(db: AsyncSession, employee_id: uuid.UUID) -> bool:
 
 
 def _day_bounds(start: date, end: date) -> tuple[datetime, datetime]:
-    return datetime.combine(start, time.min, tzinfo=UTC), datetime.combine(end + timedelta(days=1), time.min, tzinfo=UTC)
+    """UTC window for inclusive local calendar dates (Asia/Kolkata by default)."""
+    start_utc, _ = local_day_bounds(start)
+    _, end_utc = local_day_bounds(end)
+    return start_utc, end_utc
+
+
+def _display_worked_minutes(
+    *,
+    first_login: datetime | None,
+    last_logout: datetime | None,
+    is_open: bool,
+    work_date: date,
+    now: datetime,
+    stored_minutes: int,
+) -> int:
+    """
+    Hours shown on Login & Logout: only time inside the selected local work day.
+    Fixes overnight sessions that otherwise show ~23h for a short same-looking login/logout.
+    """
+    if first_login is None:
+        return 0
+    day_start, day_end = local_day_bounds(work_date)
+    start = max(ensure_utc(first_login) or day_start, day_start)
+    if is_open:
+        end = min(now, day_end)
+    elif last_logout is not None:
+        end = min(ensure_utc(last_logout) or day_end, day_end)
+    else:
+        end = min(now, day_end)
+    if end <= start:
+        return 0
+    mins = max(0, int((end - start).total_seconds() // 60))
+    # Prefer recomputed day-clamped value; stored rollup can be overnight-inflated.
+    if stored_minutes > 16 * 60 and mins < stored_minutes:
+        return mins
+    if is_open or last_logout is not None:
+        return mins
+    return max(0, int(stored_minutes or 0))
+
+
+async def _autoclose_stale_open_day(
+    db: AsyncSession,
+    day: AttendanceDay,
+    *,
+    now: datetime,
+) -> AttendanceDay:
+    """If yesterday (or earlier) is still clocked in, close it at local day end and recalculate."""
+    today_local = local_work_date(now)
+    if day.work_date >= today_local:
+        return day
+    ordered = sorted(day.events or [], key=lambda e: ensure_utc(e.timestamp) or now)
+    if not ordered or not is_clock_in(ordered[-1].event_type):
+        return day
+    _, day_end = local_day_bounds(day.work_date)
+    close_at = day_end - timedelta(seconds=1)
+    last_in = ensure_utc(ordered[-1].timestamp) or close_at
+    if close_at < last_in:
+        close_at = last_in
+    await _add_attendance_event(
+        db,
+        day,
+        AttendanceEventType.CLOCK_OUT,
+        close_at,
+        f"presence:autoclose-dayend:{day.id}"[:100],
+        "Auto-closed at end of work day (no logout recorded)",
+    )
+    await db.refresh(day, attribute_names=["events", "shift_start", "shift_end", "total_work_minutes"])
+    return day
+
+
+async def _autoclose_prior_open_sessions(
+    db: AsyncSession,
+    employee_ids: list[uuid.UUID],
+    *,
+    before_date: date,
+    now: datetime,
+) -> None:
+    """
+    Close any still-open attendance days before `before_date`.
+    Needed so overnight Active sessions do not keep counting into the next morning's board.
+    """
+    if not employee_ids:
+        return
+    stale_days = (
+        await db.execute(
+            select(AttendanceDay)
+            .options(selectinload(AttendanceDay.events))
+            .where(
+                AttendanceDay.employee_id.in_(employee_ids),
+                AttendanceDay.work_date < before_date,
+            )
+            .order_by(AttendanceDay.work_date.desc())
+        )
+    ).scalars().all()
+    # Only touch the latest prior day per employee that is still clocked in.
+    seen: set[uuid.UUID] = set()
+    for day in stale_days:
+        if day.employee_id in seen:
+            continue
+        ordered = sorted(day.events or [], key=lambda e: ensure_utc(e.timestamp) or now)
+        if ordered and is_clock_in(ordered[-1].event_type):
+            await _autoclose_stale_open_day(db, day, now=now)
+            seen.add(day.employee_id)
 
 
 async def get_presence_days(
@@ -340,7 +491,7 @@ async def get_presence_days(
     events_by_date: dict[date, list[PresenceEvent]] = defaultdict(list)
     for ev in events:
         occurred = ensure_utc(ev.occurred_at) or now
-        events_by_date[occurred.date()].append(ev)
+        events_by_date[local_work_date(occurred)].append(ev)
 
     rows: list[PresenceDay] = []
     for work_date in sorted(set(day_map) | set(events_by_date), reverse=True):
@@ -364,18 +515,63 @@ async def get_presence_days(
         row.wifi_networks = wifi_names
 
         if att is not None:
-            row.break_count = len(att.breaks or [])
+            breaks = list(att.breaks or [])
+            row.break_count = len(breaks)
             row.total_break_minutes = att.total_break_minutes or 0
+            # Merge break start/end into the same timeline managers see under Attendance history.
+            for br in breaks:
+                btype = br.break_type.value if hasattr(br.break_type, "value") else str(br.break_type)
+                source = br.source or "AUTO"
+                start_at = ensure_utc(br.start_time) or now
+                row.events.append(
+                    PresenceEventOut(
+                        event_type="BREAK_START",
+                        occurred_at=start_at,
+                        ssid=None,
+                        attendance_action="NONE",
+                        detail=f"{btype} · {source}",
+                    )
+                )
+                if br.end_time is not None:
+                    end_at = ensure_utc(br.end_time) or now
+                    mins = br.duration_minutes
+                    if mins is None:
+                        mins = max(0, int((end_at - start_at).total_seconds() // 60))
+                    row.events.append(
+                        PresenceEventOut(
+                            event_type="BREAK_END",
+                            occurred_at=end_at,
+                            ssid=None,
+                            attendance_action="NONE",
+                            detail=f"{btype} · {mins}m",
+                        )
+                    )
+            row.events.sort(key=lambda e: ensure_utc(e.occurred_at) or now)
         if att is not None and att.shift_start is not None:
-            ordered = sorted(att.events, key=lambda e: ensure_utc(e.timestamp) or now)
+            att = await _autoclose_stale_open_day(db, att, now=now)
+            ordered = sorted(att.events or [], key=lambda e: ensure_utc(e.timestamp) or now)
             row.is_logged_in = bool(ordered) and is_clock_in(ordered[-1].event_type)
             row.first_login = ensure_utc(att.shift_start)
             row.status = att.status.value if hasattr(att.status, "value") else str(att.status)
             if row.is_logged_in:
-                row.worked_minutes = max(0, int((now - row.first_login).total_seconds() // 60)) if row.first_login else 0
+                row.worked_minutes = _display_worked_minutes(
+                    first_login=row.first_login,
+                    last_logout=None,
+                    is_open=True,
+                    work_date=work_date,
+                    now=now,
+                    stored_minutes=att.total_work_minutes or 0,
+                )
             else:
                 row.last_logout = ensure_utc(att.shift_end)
-                row.worked_minutes = att.total_work_minutes
+                row.worked_minutes = _display_worked_minutes(
+                    first_login=row.first_login,
+                    last_logout=row.last_logout,
+                    is_open=False,
+                    work_date=work_date,
+                    now=now,
+                    stored_minutes=att.total_work_minutes or 0,
+                )
         elif att is not None:
             row.status = att.status.value if hasattr(att.status, "value") else str(att.status)
         rows.append(row)
@@ -415,6 +611,9 @@ async def get_team_presence(
     ids = [e.id for e in employees]
     if not ids:
         return [], TeamPresenceCounts(), 0
+
+    # Close overnight open sessions from earlier days before building today's board.
+    await _autoclose_prior_open_sessions(db, ids, before_date=work_date, now=now)
 
     att_days = (
         await db.execute(
@@ -481,15 +680,44 @@ async def get_team_presence(
 
         att = att_by_emp.get(emp.id)
         if att is not None and att.shift_start is not None:
-            ordered = sorted(att.events, key=lambda e: ensure_utc(e.timestamp) or now)
+            # Close yesterday's open sessions so hours stop at midnight instead of ~24h.
+            att = await _autoclose_stale_open_day(db, att, now=now)
+            # Repair already-stored overnight-inflated rollups with the day-clamped calculator.
+            if (att.total_work_minutes or 0) > 16 * 60:
+                await recalculate_attendance_day(db, att.id)
+                refreshed = (
+                    await db.execute(
+                        select(AttendanceDay)
+                        .options(selectinload(AttendanceDay.events))
+                        .where(AttendanceDay.id == att.id)
+                    )
+                ).scalars().first()
+                if refreshed is not None:
+                    att = refreshed
+            att_by_emp[emp.id] = att
+            ordered = sorted(att.events or [], key=lambda e: ensure_utc(e.timestamp) or now)
             row.first_login = ensure_utc(att.shift_start)
             if ordered and is_clock_in(ordered[-1].event_type):
                 row.status = "LOGGED_IN"
-                row.worked_minutes = max(0, int((now - row.first_login).total_seconds() // 60)) if row.first_login else 0
+                row.worked_minutes = _display_worked_minutes(
+                    first_login=row.first_login,
+                    last_logout=None,
+                    is_open=True,
+                    work_date=work_date,
+                    now=now,
+                    stored_minutes=att.total_work_minutes or 0,
+                )
             else:
                 row.status = "LOGGED_OUT"
                 row.last_logout = ensure_utc(att.shift_end)
-                row.worked_minutes = att.total_work_minutes
+                row.worked_minutes = _display_worked_minutes(
+                    first_login=row.first_login,
+                    last_logout=row.last_logout,
+                    is_open=False,
+                    work_date=work_date,
+                    now=now,
+                    stored_minutes=att.total_work_minutes or 0,
+                )
 
         leave = leave_by_emp.get(emp.id)
         if leave is not None:
@@ -507,6 +735,7 @@ async def get_team_presence(
             counts.not_logged_in += 1
         rows.append(row)
 
+    await db.commit()
     return rows, counts, int(pending_leaves)
 
 
