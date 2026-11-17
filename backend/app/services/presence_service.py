@@ -156,6 +156,7 @@ async def _clock_in(
 
 def _describe(event: PresenceEventIn) -> str:
     if event.detail and event.detail.strip():
+        # Keep full WORKDAY|… — message so metadata can be parsed later.
         return event.detail.strip()[:500]
     labels = {
         PresenceEventType.APP_LOGIN: "Desktop app login",
@@ -169,6 +170,87 @@ def _describe(event: PresenceEventIn) -> str:
     }
     label = labels.get(event.event_type, str(event.event_type))
     return f"{label} ({event.ssid})" if event.ssid else label
+
+
+def _parse_workday_detail(detail: str | None) -> dict[str, object] | None:
+    """Parse WORKDAY|<status>|<confirmation>|<minutes> — message."""
+    if not detail:
+        return None
+    head = detail.split(" — ", 1)[0].strip()
+    if not head.startswith("WORKDAY|"):
+        return None
+    parts = head.split("|")
+    if len(parts) < 3:
+        return None
+    status = parts[1].strip().upper()
+    confirmation = parts[2].strip().upper()
+    worked = None
+    if len(parts) >= 4 and parts[3].strip().isdigit():
+        worked = int(parts[3].strip())
+    return {
+        "status": status,
+        "confirmation": confirmation,
+        "worked_minutes_reported": worked,
+        "completed_nine_hours": status == "COMPLETED_9H",
+        "early_logout": status == "EARLY_LOGOUT",
+        "auto_logout": confirmation in {"NO_RESPONSE", "EXTENSION_ENDED", "EOD_IDLE"} or status == "AUTO_LOGOUT",
+        "raw": detail[:500],
+    }
+
+
+def _apply_workday_metadata(day: AttendanceDay, detail: str | None) -> None:
+    parsed = _parse_workday_detail(detail)
+    if not parsed:
+        return
+    meta = dict(day.metadata_json or {})
+    meta["workday"] = parsed
+    day.metadata_json = meta
+
+
+def _workday_fields_from_day(day: AttendanceDay) -> dict[str, object]:
+    meta = day.metadata_json or {}
+    workday = meta.get("workday") if isinstance(meta, dict) else None
+    if not isinstance(workday, dict):
+        # Fall back to parsing last clock-out note.
+        note = _last_clock_out_note(day)
+        parsed = _parse_workday_detail(note) if note and note.startswith("WORKDAY|") else None
+        # Notes are human-only after _describe; try metadata only.
+        if not parsed:
+            # Reconstruct from human note keywords when structured meta missing.
+            if note:
+                lower = note.lower()
+                early = "early logout" in lower
+                completed = "9-hour" in lower or "9 hours" in lower or "completing 9" in lower
+                no_resp = "no response" in lower
+                auto = "auto-logout" in lower or "auto logout" in lower
+                return {
+                    "workday_status": "EARLY_LOGOUT" if early else ("COMPLETED_9H" if completed else ("AUTO_LOGOUT" if auto else None)),
+                    "confirmation_status": "NO_RESPONSE" if no_resp else None,
+                    "completed_nine_hours": bool(completed) or (day.total_work_minutes or 0) >= 9 * 60,
+                    "early_logout": early or (0 < (day.total_work_minutes or 0) < 9 * 60),
+                    "auto_logout": auto,
+                    "logout_note": note,
+                }
+            return {
+                "workday_status": None,
+                "confirmation_status": None,
+                "completed_nine_hours": (day.total_work_minutes or 0) >= 9 * 60,
+                "early_logout": 0 < (day.total_work_minutes or 0) < 9 * 60,
+                "auto_logout": False,
+                "logout_note": None,
+            }
+        workday = parsed
+
+    note = _last_clock_out_note(day)
+    mins = int(day.total_work_minutes or 0)
+    return {
+        "workday_status": workday.get("status"),
+        "confirmation_status": workday.get("confirmation"),
+        "completed_nine_hours": bool(workday.get("completed_nine_hours")) or mins >= 9 * 60,
+        "early_logout": bool(workday.get("early_logout")) or (0 < mins < 9 * 60),
+        "auto_logout": bool(workday.get("auto_logout")),
+        "logout_note": note,
+    }
 
 
 def _last_clock_out_note(day: AttendanceDay) -> str | None:
@@ -322,9 +404,11 @@ async def record_presence_event(
     elif wifi_counts_for_attendance and event.event_type in LOGOUT_EVENT_TYPES:
         if open_session is not None:
             if occurred_at >= open_session[1]:
+                notes = _describe(event)
                 await _add_attendance_event(
-                    db, open_session[0], AttendanceEventType.CLOCK_OUT, occurred_at, attendance_id, _describe(event)
+                    db, open_session[0], AttendanceEventType.CLOCK_OUT, occurred_at, attendance_id, notes
                 )
+                _apply_workday_metadata(open_session[0], event.detail or notes)
                 action = PresenceAttendanceAction.CLOCK_OUT
         else:
             # Already logged out today: a later app logout / Wi-Fi disconnect becomes the day's logout time.
@@ -338,9 +422,11 @@ async def record_presence_event(
             ).scalars().first()
             last_out = ensure_utc(day.shift_end) if day is not None else None
             if day is not None and last_out is not None and occurred_at > last_out:
+                notes = _describe(event)
                 await _add_attendance_event(
-                    db, day, AttendanceEventType.CLOCK_OUT, occurred_at, attendance_id, _describe(event)
+                    db, day, AttendanceEventType.CLOCK_OUT, occurred_at, attendance_id, notes
                 )
+                _apply_workday_metadata(day, event.detail or notes)
                 action = PresenceAttendanceAction.CLOCK_OUT
 
     db.add(
@@ -739,7 +825,18 @@ async def get_team_presence(
                     now=now,
                     stored_minutes=att.total_work_minutes or 0,
                 )
-                row.logout_note = _last_clock_out_note(att)
+                flags = _workday_fields_from_day(att)
+                note = flags.get("logout_note")
+                if isinstance(note, str) and " — " in note:
+                    note = note.split(" — ", 1)[1]
+                row.logout_note = note if isinstance(note, str) else None
+                row.workday_status = flags.get("workday_status") if isinstance(flags.get("workday_status"), str) else None
+                row.confirmation_status = (
+                    flags.get("confirmation_status") if isinstance(flags.get("confirmation_status"), str) else None
+                )
+                row.completed_nine_hours = bool(flags.get("completed_nine_hours"))
+                row.early_logout = bool(flags.get("early_logout"))
+                row.auto_logout = bool(flags.get("auto_logout"))
 
         leave = leave_by_emp.get(emp.id)
         if leave is not None:

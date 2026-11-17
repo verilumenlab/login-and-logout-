@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
 import './App.css';
 import { DeviceInfo, ScreenId, UserSession } from './types';
-import { getNativeDeviceInfo, setUpdateContext } from './api/ipc';
+import { getNativeDeviceInfo, setUpdateContext, showDesktopNotification } from './api/ipc';
 import { clearLocalSession, getStoredUserSession, logoutUser, rememberDeviceIdentifier } from './api/backend';
 import { bindBreakQueueToUser } from './attendance/breakTracker';
 import { bindQueueToUser } from './presence/tracker';
 import { usePresenceTracker, WorkdayCheckRequest } from './presence/usePresenceTracker';
 import {
-  logoutReasonForTimeout,
-  markCheckpointConfirmed,
+  clearEarlyLogoutPrompt,
+  logoutNotice,
+  markEarlyLogoutPromptOpened,
+  markNineHourConfirmedWithExtension,
+  shouldConfirmEarlyLogout,
+  workedMinutesNow,
 } from './presence/workdayPolicy';
 
 import { ChangePasswordModal } from './components/ChangePasswordModal';
@@ -35,6 +39,8 @@ export default function App() {
   const [loggingOut, setLoggingOut] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [workdayCheck, setWorkdayCheck] = useState<WorkdayCheckRequest | null>(null);
+  /** When early-logout confirm finishes with Logout, also sign out of the app. */
+  const [pendingAppSignOut, setPendingAppSignOut] = useState(false);
 
   useEffect(() => {
     getNativeDeviceInfo().then((info) => {
@@ -54,8 +60,16 @@ export default function App() {
     );
   }, []);
 
-  const { status, breakStatus, dataVersion, refresh, recordAppLogout, recordWorkLogin, recordWorkLogout, syncWorkStartFromServer } =
-    usePresenceTracker(device, session !== null, handleSessionExpired, session, setNotice, setWorkdayCheck);
+  const {
+    status,
+    breakStatus,
+    dataVersion,
+    refresh,
+    recordAppLogout,
+    recordWorkLogin,
+    recordWorkLogout,
+    syncWorkStartFromServer,
+  } = usePresenceTracker(device, session !== null, handleSessionExpired, session, setNotice, setWorkdayCheck);
 
   const handleLogin = (newSession: UserSession) => {
     bindQueueToUser(newSession.user_id);
@@ -69,7 +83,18 @@ export default function App() {
     });
   };
 
-  const handleLogout = async () => {
+  const openEarlyLogoutPrompt = useCallback((alsoSignOutApp: boolean) => {
+    const worked = workedMinutesNow();
+    const openedAt = markEarlyLogoutPromptOpened();
+    setPendingAppSignOut(alsoSignOutApp);
+    setWorkdayCheck({ kind: 'early_logout', openedAt, workedMinutes: worked });
+    void showDesktopNotification(
+      'WorkPulse — Early logout',
+      'You have not completed 9 working hours. Confirm continue working or logout within 10 minutes.'
+    );
+  }, []);
+
+  const finishAppSignOut = useCallback(async () => {
     setLoggingOut(true);
     try {
       await recordAppLogout();
@@ -77,38 +102,97 @@ export default function App() {
     } finally {
       setLoggingOut(false);
       setWorkdayCheck(null);
+      setPendingAppSignOut(false);
       setSession(null);
     }
+  }, [recordAppLogout]);
+
+  const handleLogout = async () => {
+    // Sign-out from app always ends the work session; confirm if under 9h.
+    if (status.isLoggedIn && shouldConfirmEarlyLogout()) {
+      openEarlyLogoutPrompt(true);
+      return;
+    }
+    await finishAppSignOut();
   };
 
-  const handleStayInOffice = useCallback(() => {
+  const handleWorkLogoutClick = useCallback(async () => {
+    if (shouldConfirmEarlyLogout()) {
+      openEarlyLogoutPrompt(false);
+      return;
+    }
+    await recordWorkLogout('nine_hour_manual');
+    setNotice(logoutNotice('nine_hour_manual'));
+  }, [openEarlyLogoutPrompt, recordWorkLogout]);
+
+  const handleContinue = useCallback(() => {
     if (!workdayCheck) return;
-    markCheckpointConfirmed(workdayCheck.checkpoint);
+    if (workdayCheck.kind === 'nine_hour') {
+      markNineHourConfirmedWithExtension();
+      setWorkdayCheck(null);
+      setNotice('Confirmed — you have 10 more minutes, then the day will end automatically.');
+      return;
+    }
+    // Early logout: continue working
+    clearEarlyLogoutPrompt();
     setWorkdayCheck(null);
-    setNotice(
-      workdayCheck.checkpoint === '9h'
-        ? 'Thanks — marked as still in office after 9 hours. Log out when you finish.'
-        : 'Thanks — marked as still in office after 7 hours.'
-    );
+    setPendingAppSignOut(false);
+    setNotice('Session kept active — continue working toward 9 hours.');
   }, [workdayCheck]);
 
-  const handleLeaveOffice = useCallback(async () => {
+  const handleConfirmLogout = useCallback(async () => {
+    if (!workdayCheck) return;
+    const kind = workdayCheck.kind;
+    const signOutApp = pendingAppSignOut;
     setWorkdayCheck(null);
-    await recordWorkLogout('still_in_office_no');
-    setNotice('Logged out — you confirmed you are not in the office.');
-  }, [recordWorkLogout]);
+    clearEarlyLogoutPrompt();
+
+    if (kind === 'nine_hour') {
+      await recordWorkLogout('nine_hour_manual');
+      setNotice(logoutNotice('nine_hour_manual'));
+      return;
+    }
+
+    await recordWorkLogout('early_logout_confirmed');
+    setNotice(logoutNotice('early_logout_confirmed'));
+    if (signOutApp) {
+      setLoggingOut(true);
+      try {
+        await logoutUser();
+      } finally {
+        setLoggingOut(false);
+        setPendingAppSignOut(false);
+        setSession(null);
+      }
+    }
+  }, [workdayCheck, pendingAppSignOut, recordWorkLogout]);
 
   const handleCheckTimeout = useCallback(async () => {
     if (!workdayCheck) return;
-    const reason = logoutReasonForTimeout(workdayCheck.checkpoint);
+    const kind = workdayCheck.kind;
+    const signOutApp = pendingAppSignOut;
     setWorkdayCheck(null);
-    await recordWorkLogout(reason);
-    setNotice(
-      reason === 'no_response_9h'
-        ? 'Auto logged out — no response after the 9-hour office check.'
-        : 'Auto logged out — no response after the 7-hour office check.'
-    );
-  }, [workdayCheck, recordWorkLogout]);
+    clearEarlyLogoutPrompt();
+
+    if (kind === 'nine_hour') {
+      await recordWorkLogout('nine_hour_no_response');
+      setNotice(logoutNotice('nine_hour_no_response'));
+      return;
+    }
+
+    await recordWorkLogout('early_logout_no_response');
+    setNotice(logoutNotice('early_logout_no_response'));
+    if (signOutApp) {
+      setLoggingOut(true);
+      try {
+        await logoutUser();
+      } finally {
+        setLoggingOut(false);
+        setPendingAppSignOut(false);
+        setSession(null);
+      }
+    }
+  }, [workdayCheck, pendingAppSignOut, recordWorkLogout]);
 
   if (!session) {
     return <LoginScreen device={device} onLoginSuccess={handleLogin} notice={notice} />;
@@ -141,7 +225,7 @@ export default function App() {
             dataVersion={dataVersion}
             breakStatus={breakStatus}
             onWorkLogin={recordWorkLogin}
-            onWorkLogout={() => recordWorkLogout()}
+            onWorkLogout={handleWorkLogoutClick}
             onFirstLoginKnown={syncWorkStartFromServer}
           />
         )}
@@ -153,10 +237,11 @@ export default function App() {
       )}
       {workdayCheck && (
         <WorkdayCheckModal
-          checkpoint={workdayCheck.checkpoint}
+          kind={workdayCheck.kind}
           openedAt={workdayCheck.openedAt}
-          onStay={handleStayInOffice}
-          onLeave={() => void handleLeaveOffice()}
+          workedMinutes={workdayCheck.workedMinutes}
+          onContinue={handleContinue}
+          onLogout={() => void handleConfirmLogout()}
           onTimeout={() => void handleCheckTimeout()}
         />
       )}

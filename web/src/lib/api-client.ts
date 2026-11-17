@@ -493,6 +493,11 @@ export interface TeamPresenceRow {
   last_signal_at: string | null;
   leave_type_name: string | null;
   logout_note?: string | null;
+  workday_status?: string | null;
+  confirmation_status?: string | null;
+  completed_nine_hours?: boolean;
+  early_logout?: boolean;
+  auto_logout?: boolean;
 }
 
 export interface TeamPresenceResponse {

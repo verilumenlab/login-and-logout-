@@ -96,8 +96,14 @@ class TeamPresenceRow(BaseModel):
     wifi_networks: list[str] = Field(default_factory=list)
     last_signal_at: datetime | None = None
     leave_type_name: str | None = None
-    # Last clock-out note (e.g. no response after 7h/9h office check).
+    # Last clock-out note (human-readable).
     logout_note: str | None = None
+    # Structured workday outcome from office policy.
+    workday_status: str | None = None  # EARLY_LOGOUT | COMPLETED_9H | AUTO_LOGOUT | …
+    confirmation_status: str | None = None  # CONFIRMED | NO_RESPONSE | EXTENSION_ENDED | EOD_IDLE | …
+    completed_nine_hours: bool = False
+    early_logout: bool = False
+    auto_logout: bool = False
 
 
 class TeamPresenceCounts(BaseModel):

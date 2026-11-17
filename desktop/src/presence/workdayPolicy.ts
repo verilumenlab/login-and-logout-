@@ -1,27 +1,32 @@
 /**
- * Office day policy mirrored from backend office_policy:
- * 09:30–18:30 (9h), late login until 10:30, confirm at 7h & 9h, 10 min timeout → logout.
+ * Office day policy (mirrors backend office_policy):
+ * - Actual login time recorded; 9h required from that login
+ * - At 9h: ask still working? Yes → +10 min then auto logout; no reply 10 min → logout
+ * - Logout before 9h: confirm continue vs logout; no reply 10 min → logout
  */
 
-export const OFFICE_START_MINUTES = 9 * 60 + 30; // 09:30
-export const OFFICE_END_MINUTES = 18 * 60 + 30; // 18:30
-export const LATE_LOGIN_GRACE_MINUTES = 60; // until 10:30
+export const OFFICE_START_MINUTES = 9 * 60 + 30;
+export const OFFICE_END_MINUTES = 18 * 60 + 30;
 export const EXPECTED_WORK_MINUTES = 9 * 60;
-export const CHECK_EARLY_MINUTES = 7 * 60;
-export const CHECK_FULL_MINUTES = 9 * 60;
+export const EARLY_BAND_MINUTES = 7 * 60;
 export const RESPONSE_TIMEOUT_MS = 10 * 60 * 1000;
+export const NINE_HOUR_EXTENSION_MS = 10 * 60 * 1000;
 
-export type WorkdayCheckpoint = '7h' | '9h';
+export type WorkdayPromptKind = 'nine_hour' | 'early_logout';
 
 export type WorkdayLogoutReason =
-  | 'still_in_office_no'
-  | 'no_response_7h'
-  | 'no_response_9h'
+  | 'early_logout_confirmed'
+  | 'early_logout_no_response'
+  | 'nine_hour_no_response'
+  | 'nine_hour_extension_ended'
+  | 'nine_hour_manual'
   | 'eod_idle';
 
 const WORK_START_KEY_PREFIX = '__work_start_';
-const CONFIRMED_KEY_PREFIX = '__work_confirmed_';
-const PROMPT_KEY_PREFIX = '__work_prompt_';
+const NINE_CONFIRMED_KEY = '__work_9h_confirmed_';
+const NINE_PROMPT_KEY = '__work_9h_prompt_';
+const NINE_EXTENSION_ENDS_KEY = '__work_9h_extension_ends_';
+const EARLY_PROMPT_KEY = '__work_early_prompt_';
 
 function localDateKey(d = new Date()): string {
   const y = d.getFullYear();
@@ -34,15 +39,6 @@ function workStartKey(date = localDateKey()): string {
   return `${WORK_START_KEY_PREFIX}${date}`;
 }
 
-function confirmedKey(checkpoint: WorkdayCheckpoint, date = localDateKey()): string {
-  return `${CONFIRMED_KEY_PREFIX}${checkpoint}_${date}`;
-}
-
-function promptKey(checkpoint: WorkdayCheckpoint, date = localDateKey()): string {
-  return `${PROMPT_KEY_PREFIX}${checkpoint}_${date}`;
-}
-
-/** Persist / refine today's first-login timestamp (prefer earliest). */
 export function syncWorkStart(iso: string | Date): void {
   const next = typeof iso === 'string' ? iso : iso.toISOString();
   const key = workStartKey();
@@ -55,10 +51,10 @@ export function syncWorkStart(iso: string | Date): void {
 export function clearWorkdaySession(): void {
   const date = localDateKey();
   localStorage.removeItem(workStartKey(date));
-  localStorage.removeItem(confirmedKey('7h', date));
-  localStorage.removeItem(confirmedKey('9h', date));
-  localStorage.removeItem(promptKey('7h', date));
-  localStorage.removeItem(promptKey('9h', date));
+  localStorage.removeItem(`${NINE_CONFIRMED_KEY}${date}`);
+  localStorage.removeItem(`${NINE_PROMPT_KEY}${date}`);
+  localStorage.removeItem(`${NINE_EXTENSION_ENDS_KEY}${date}`);
+  localStorage.removeItem(`${EARLY_PROMPT_KEY}${date}`);
 }
 
 export function getWorkStartMs(): number | null {
@@ -80,54 +76,118 @@ export function workedMinutesNow(now = Date.now()): number {
   return Math.max(0, Math.floor((clippedEnd - clippedStart) / 60000));
 }
 
-export function isCheckpointConfirmed(checkpoint: WorkdayCheckpoint): boolean {
-  return localStorage.getItem(confirmedKey(checkpoint)) === '1';
+export function hasCompletedNineHours(workedMinutes = workedMinutesNow()): boolean {
+  return workedMinutes >= EXPECTED_WORK_MINUTES;
 }
 
-export function markCheckpointConfirmed(checkpoint: WorkdayCheckpoint): void {
-  localStorage.setItem(confirmedKey(checkpoint), '1');
-  localStorage.removeItem(promptKey(checkpoint));
+export function isNineHourConfirmed(): boolean {
+  return localStorage.getItem(`${NINE_CONFIRMED_KEY}${localDateKey()}`) === '1';
 }
 
-export function markPromptOpened(checkpoint: WorkdayCheckpoint): void {
-  if (!localStorage.getItem(promptKey(checkpoint))) {
-    localStorage.setItem(promptKey(checkpoint), String(Date.now()));
-  }
+export function markNineHourConfirmedWithExtension(): number {
+  const date = localDateKey();
+  localStorage.setItem(`${NINE_CONFIRMED_KEY}${date}`, '1');
+  localStorage.removeItem(`${NINE_PROMPT_KEY}${date}`);
+  const endsAt = Date.now() + NINE_HOUR_EXTENSION_MS;
+  localStorage.setItem(`${NINE_EXTENSION_ENDS_KEY}${date}`, String(endsAt));
+  return endsAt;
 }
 
-export function getPromptOpenedAt(checkpoint: WorkdayCheckpoint): number | null {
-  const raw = localStorage.getItem(promptKey(checkpoint));
+export function getNineHourExtensionEndsAt(): number | null {
+  const raw = localStorage.getItem(`${NINE_EXTENSION_ENDS_KEY}${localDateKey()}`);
   if (!raw) return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
 }
 
-/** Next checkpoint that needs a response, or null. */
-export function nextDueCheckpoint(workedMinutes: number): WorkdayCheckpoint | null {
-  if (workedMinutes >= CHECK_FULL_MINUTES && !isCheckpointConfirmed('9h')) return '9h';
-  if (workedMinutes >= CHECK_EARLY_MINUTES && !isCheckpointConfirmed('7h')) return '7h';
-  return null;
+export function clearNineHourExtension(): void {
+  localStorage.removeItem(`${NINE_EXTENSION_ENDS_KEY}${localDateKey()}`);
 }
 
-export function checkpointLabel(checkpoint: WorkdayCheckpoint): string {
-  return checkpoint === '9h' ? '9 hours (full office day)' : '7 hours';
+export function markNineHourPromptOpened(): number {
+  const key = `${NINE_PROMPT_KEY}${localDateKey()}`;
+  if (!localStorage.getItem(key)) {
+    localStorage.setItem(key, String(Date.now()));
+  }
+  return Number(localStorage.getItem(key));
 }
 
-export function logoutReasonForTimeout(checkpoint: WorkdayCheckpoint): WorkdayLogoutReason {
-  return checkpoint === '9h' ? 'no_response_9h' : 'no_response_7h';
+export function getNineHourPromptOpenedAt(): number | null {
+  const raw = localStorage.getItem(`${NINE_PROMPT_KEY}${localDateKey()}`);
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
 }
 
-export function logoutReasonLabel(reason: WorkdayLogoutReason): string {
+export function markEarlyLogoutPromptOpened(): number {
+  const key = `${EARLY_PROMPT_KEY}${localDateKey()}`;
+  localStorage.setItem(key, String(Date.now()));
+  return Date.now();
+}
+
+export function getEarlyLogoutPromptOpenedAt(): number | null {
+  const raw = localStorage.getItem(`${EARLY_PROMPT_KEY}${localDateKey()}`);
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function clearEarlyLogoutPrompt(): void {
+  localStorage.removeItem(`${EARLY_PROMPT_KEY}${localDateKey()}`);
+}
+
+/** True when a 9h completion prompt should be shown (once until confirmed/timeout). */
+export function shouldShowNineHourPrompt(workedMinutes = workedMinutesNow()): boolean {
+  return workedMinutes >= EXPECTED_WORK_MINUTES && !isNineHourConfirmed();
+}
+
+/** True when logout is being attempted before 9h are complete. */
+export function shouldConfirmEarlyLogout(workedMinutes = workedMinutesNow()): boolean {
+  return workedMinutes < EXPECTED_WORK_MINUTES;
+}
+
+export function earlyHoursLabel(workedMinutes: number): string {
+  const h = Math.floor(workedMinutes / 60);
+  const m = workedMinutes % 60;
+  if (m === 0) return `${h} hour${h === 1 ? '' : 's'}`;
+  return `${h}h ${m}m`;
+}
+
+export function buildLogoutDetail(reason: WorkdayLogoutReason, workedMinutes: number): string {
+  const mins = Math.max(0, Math.floor(workedMinutes));
   switch (reason) {
-    case 'no_response_7h':
-      return 'Auto-logout: no response after 7h office check';
-    case 'no_response_9h':
-      return 'Auto-logout: no response after 9h office check';
-    case 'still_in_office_no':
-      return 'Logged out: confirmed not in office';
+    case 'early_logout_confirmed':
+      return `WORKDAY|EARLY_LOGOUT|CONFIRMED|${mins} — Early logout after ${earlyHoursLabel(mins)} (confirmed)`;
+    case 'early_logout_no_response':
+      return `WORKDAY|EARLY_LOGOUT|NO_RESPONSE|${mins} — Auto-logout: no response on early logout check (${earlyHoursLabel(mins)})`;
+    case 'nine_hour_no_response':
+      return `WORKDAY|COMPLETED_9H|NO_RESPONSE|${mins} — Auto-logout: no response after 9-hour check`;
+    case 'nine_hour_extension_ended':
+      return `WORKDAY|COMPLETED_9H|EXTENSION_ENDED|${mins} — Auto-logout: 10-minute extension after 9 hours ended`;
+    case 'nine_hour_manual':
+      return `WORKDAY|COMPLETED_9H|CONFIRMED|${mins} — Logged out after completing 9 hours`;
     case 'eod_idle':
-      return 'Auto-logout at 6:30 PM — laptop idle';
+      return `WORKDAY|AUTO_LOGOUT|EOD_IDLE|${mins} — Auto-logout at 6:30 PM — laptop idle`;
     default:
-      return 'Auto-logout';
+      return `WORKDAY|AUTO_LOGOUT|UNKNOWN|${mins}`;
+  }
+}
+
+export function logoutNotice(reason: WorkdayLogoutReason): string {
+  switch (reason) {
+    case 'early_logout_confirmed':
+      return 'Logged out early — your actual hours were recorded.';
+    case 'early_logout_no_response':
+      return 'Auto logged out — no response on the early logout confirmation.';
+    case 'nine_hour_no_response':
+      return 'Auto logged out — no response after completing 9 hours.';
+    case 'nine_hour_extension_ended':
+      return 'Auto logged out — your extra 10 minutes after 9 hours have ended.';
+    case 'nine_hour_manual':
+      return 'Logged out after completing 9 hours.';
+    case 'eod_idle':
+      return 'Auto logged out at 6:30 PM — laptop was idle.';
+    default:
+      return 'Logged out.';
   }
 }

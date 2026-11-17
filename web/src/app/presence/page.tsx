@@ -149,8 +149,8 @@ export default function PresencePage() {
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
             {data?.scope === 'TEAM' ? 'Your direct reports. ' : 'All employees. '}
-            Office hours 9:30 AM – 6:30 PM (9h). Login grace until 10:30 AM. After 7h and 9h the app asks “still in
-            office?” — no reply in 10 minutes auto-logs out (shown under Logout).
+            Hours are from each person’s actual login (not only 9:30). Full day = 9h. At 9h the app asks if still
+            working (confirm = +10 min). Logout before 9h needs confirmation. No reply in 10 minutes → auto logout.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -306,14 +306,30 @@ export default function PresencePage() {
                       <div>
                         <div>{formatTime(r.last_logout)}</div>
                         {r.logout_note && (
-                          <div className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 max-w-[180px] leading-snug">
+                          <div className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 max-w-[200px] leading-snug">
                             {r.logout_note}
                           </div>
                         )}
                       </div>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-right tabular-nums">{r.first_login ? formatDuration(displayMinutes(r, date)) : '—'}</td>
+                  <td className="px-4 py-3 text-right tabular-nums">
+                    {r.first_login ? (
+                      <div>
+                        <div>{formatDuration(displayMinutes(r, date))}</div>
+                        <div className="text-[10px] text-slate-500 mt-0.5 space-y-0.5">
+                          {r.completed_nine_hours && <div className="text-emerald-600">9h completed</div>}
+                          {r.early_logout && <div className="text-amber-600">Early logout</div>}
+                          {r.auto_logout && <div className="text-rose-600">Auto logout</div>}
+                          {r.confirmation_status === 'NO_RESPONSE' && (
+                            <div className="text-rose-600">No response</div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     {r.first_wifi_connected_at ? (
                       <div className="flex items-center gap-1.5">

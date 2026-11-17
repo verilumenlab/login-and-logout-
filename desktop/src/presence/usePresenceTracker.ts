@@ -23,13 +23,15 @@ import {
 import { DeviceInfo, PresenceEventIn, TrackerStatus, UserSession } from '../types';
 import { endOfDayLabel, evaluateEndOfDayLogout } from './endOfDayLogout';
 import {
-  WorkdayCheckpoint,
   WorkdayLogoutReason,
+  WorkdayPromptKind,
+  buildLogoutDetail,
   clearWorkdaySession,
-  getPromptOpenedAt,
-  logoutReasonLabel,
-  markPromptOpened,
-  nextDueCheckpoint,
+  getNineHourExtensionEndsAt,
+  getNineHourPromptOpenedAt,
+  hasCompletedNineHours,
+  markNineHourPromptOpened,
+  shouldShowNineHourPrompt,
   syncWorkStart,
   workedMinutesNow,
 } from './workdayPolicy';
@@ -54,14 +56,13 @@ export type BreakTrackerStatus = {
 };
 
 export type WorkdayCheckRequest = {
-  checkpoint: WorkdayCheckpoint;
+  kind: WorkdayPromptKind;
   openedAt: number;
+  workedMinutes: number;
 };
 
 /**
- * Runs automatic login/logout tracking while an employee is signed in.
- * Also consumes laptop power events and drives automatic break tracking
- * (idle / lock / sleep), plus 7h/9h office presence checks.
+ * Automatic login/logout tracking, idle breaks, 9h completion prompt, and 6:30 idle stop.
  */
 export function usePresenceTracker(
   device: DeviceInfo | null,
@@ -110,7 +111,8 @@ export function usePresenceTracker(
       if (!device) return false;
       endAutoBreak(device.device_id);
       const wifiNow = await getConnectedWifiInfo();
-      const detail = reason ? logoutReasonLabel(reason) : null;
+      const mins = workedMinutesNow();
+      const detail = reason ? buildLogoutDetail(reason, mins) : null;
       queueAppEvent('APP_LOGOUT', device.device_id, wifiNow.is_wifi ? wifiNow.ssid : undefined, detail);
       clearWorkdaySession();
       workdayCheckRef.current?.(null);
@@ -165,33 +167,42 @@ export function usePresenceTracker(
 
       const workOpen = isLoggedIn ?? loggedInRef.current;
       if (workOpen === true) {
-        // 7h / 9h office presence confirmation (10 min to reply).
-        const due = nextDueCheckpoint(workedMinutesNow());
-        if (due) {
-          const alreadyOpen = getPromptOpenedAt(due);
-          markPromptOpened(due);
-          const openedAt = getPromptOpenedAt(due) || Date.now();
-          workdayCheckRef.current?.({ checkpoint: due, openedAt });
-          if (!alreadyOpen) {
+        const worked = workedMinutesNow();
+
+        // After 9h confirm +10 min: when extension ends → auto logout.
+        const extensionEnds = getNineHourExtensionEndsAt();
+        if (extensionEnds != null && Date.now() >= extensionEnds) {
+          await performWorkLogout('nine_hour_extension_ended');
+          isLoggedIn = false;
+          const msg = 'Auto logged out — your extra 10 minutes after 9 hours have ended.';
+          noticeRef.current?.(msg);
+          void showDesktopNotification('WorkPulse — Auto logout', msg);
+        } else if (shouldShowNineHourPrompt(worked)) {
+          const already = getNineHourPromptOpenedAt();
+          const openedAt = markNineHourPromptOpened();
+          workdayCheckRef.current?.({ kind: 'nine_hour', openedAt, workedMinutes: worked });
+          if (!already) {
             void showDesktopNotification(
-              'WorkPulse — Still in office?',
-              `You have reached about ${due === '9h' ? '9' : '7'} hours. Please confirm in the app within 10 minutes.`
+              'WorkPulse — 9 hours completed',
+              'You have completed 9 hours of work. Are you still working in the office? Reply within 10 minutes.'
             );
           }
         }
 
-        // 6:30 PM idle hard stop.
-        const eod = await evaluateEndOfDayLogout({ isWorkLoggedIn: true });
-        if (eod.action === 'auto_logout') {
-          await performWorkLogout('eod_idle');
-          isLoggedIn = false;
-          const msg = `Auto logged out at ${endOfDayLabel()} — laptop was idle (not in use).`;
-          noticeRef.current?.(msg);
-          void showDesktopNotification('WorkPulse — Auto logout', msg);
-        } else if (eod.action === 'still_active' && eod.notified) {
-          const msg = `Still using your laptop after ${endOfDayLabel()}. You stay logged in — use Logout when you finish, or we will auto-logout once the laptop is idle.`;
-          noticeRef.current?.(msg);
-          void showDesktopNotification('WorkPulse — Still working?', msg);
+        // 6:30 PM idle hard stop (wall clock).
+        if ((isLoggedIn ?? loggedInRef.current) === true) {
+          const eod = await evaluateEndOfDayLogout({ isWorkLoggedIn: true });
+          if (eod.action === 'auto_logout') {
+            await performWorkLogout('eod_idle');
+            isLoggedIn = false;
+            const msg = `Auto logged out at ${endOfDayLabel()} — laptop was idle (not in use).`;
+            noticeRef.current?.(msg);
+            void showDesktopNotification('WorkPulse — Auto logout', msg);
+          } else if (eod.action === 'still_active' && eod.notified) {
+            const msg = `Still using your laptop after ${endOfDayLabel()}. You stay logged in until idle or you log out.`;
+            noticeRef.current?.(msg);
+            void showDesktopNotification('WorkPulse — Still working?', msg);
+          }
         }
       } else if (workOpen === false) {
         workdayCheckRef.current?.(null);
@@ -279,14 +290,21 @@ export function usePresenceTracker(
     await setPresenceSession({ signedIn: false, deviceId: device.device_id, userId: null });
     const wifi = await getConnectedWifiInfo();
     await collectWifiEvents(device.device_id, device.os_type);
-    queueAppEvent('APP_LOGOUT', device.device_id, wifi.is_wifi ? wifi.ssid : undefined);
+    const mins = workedMinutesNow();
+    const reason: WorkdayLogoutReason = hasCompletedNineHours(mins) ? 'nine_hour_manual' : 'early_logout_confirmed';
+    queueAppEvent(
+      'APP_LOGOUT',
+      device.device_id,
+      wifi.is_wifi ? wifi.ssid : undefined,
+      buildLogoutDetail(reason, mins)
+    );
     clearWorkdaySession();
     workdayCheckRef.current?.(null);
     try {
       await flushBreakQueue();
       await flushQueue();
     } catch {
-      // Left in the queue; it is sent after the next sign-in.
+      // queued for next sign-in
     }
   }, [device]);
 
@@ -304,7 +322,10 @@ export function usePresenceTracker(
   const recordWorkLogout = useCallback(
     async (reason?: WorkdayLogoutReason | null) => {
       if (!device) return;
-      await performWorkLogout(reason ?? null);
+      const mins = workedMinutesNow();
+      const resolved =
+        reason ?? (hasCompletedNineHours(mins) ? 'nine_hour_manual' : 'early_logout_confirmed');
+      await performWorkLogout(resolved);
       setVersion((v) => v + 1);
       await tick();
     },
@@ -320,5 +341,6 @@ export function usePresenceTracker(
     recordWorkLogin,
     recordWorkLogout,
     syncWorkStartFromServer: syncWorkStart,
+    getWorkedMinutes: workedMinutesNow,
   };
 }

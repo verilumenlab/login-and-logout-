@@ -1,35 +1,34 @@
 """
 Organization office-day policy (Asia/Kolkata).
 
-Office hours: 09:30 – 18:30 (9 hours).
-Late login grace: until 10:30 (60 minutes after start).
-Presence checks: after 7h and 9h worked — employee must confirm still in office;
-no response within 10 minutes → auto logout.
+Office hours: 09:30 – 18:30.
+Every employee must complete 9 hours from their actual login time.
+- At 9h: ask if still working; confirm → +10 minutes; no reply in 10 min → auto logout.
+- Logout attempt before 9h: confirm continue vs logout; no reply in 10 min → auto logout.
 """
 
 from __future__ import annotations
 
 from datetime import time
 
-# Wall-clock office window
 OFFICE_START = time(9, 30)
 OFFICE_END = time(18, 30)
 
-# Minutes after OFFICE_START before arrival is late (09:30 + 60 = 10:30)
+# Login after 09:30 is fine until 10:30 (still records actual login time).
 LATE_LOGIN_GRACE_MINUTES = 60
 
-# Expected paid / full day length
 EXPECTED_WORK_MINUTES = 9 * 60
-
-# Presence confirmation checkpoints (worked minutes from first login)
-CHECK_EARLY_MINUTES = 7 * 60
-CHECK_FULL_MINUTES = 9 * 60
-
-# How long the employee has to answer "still in office?"
+EARLY_LOGOUT_THRESHOLD_MINUTES = 7 * 60  # “early” band starts around 7h
 RESPONSE_TIMEOUT_MINUTES = 10
+# After confirming still working at 9h, allow this many more minutes then end the day.
+NINE_HOUR_EXTENSION_MINUTES = 10
 
 DEFAULT_SCHEDULE_NAME = "Standard Office 9:30–6:30"
 DEFAULT_SCHEDULE_DESCRIPTION = (
-    "Office day 09:30–18:30 (9 hours). Login grace until 10:30. "
-    "Confirm still in office after 7h and 9h; no reply in 10 minutes auto-logs out."
+    "Office day 09:30–18:30. Record actual login; require 9 working hours from login. "
+    "At 9h ask if still working (confirm = +10 min). Early logout before 9h needs confirmation. "
+    "No reply in 10 minutes auto-logs out."
 )
+
+# Structured logout detail prefix: WORKDAY|<STATUS>|<CONFIRMATION>|<worked_minutes>
+WORKDAY_DETAIL_PREFIX = "WORKDAY|"

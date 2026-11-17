@@ -2,15 +2,16 @@ import React, { useEffect, useRef, useState } from 'react';
 
 import {
   RESPONSE_TIMEOUT_MS,
-  WorkdayCheckpoint,
-  checkpointLabel,
+  WorkdayPromptKind,
+  earlyHoursLabel,
 } from '../presence/workdayPolicy';
 
 interface WorkdayCheckModalProps {
-  checkpoint: WorkdayCheckpoint;
+  kind: WorkdayPromptKind;
   openedAt: number;
-  onStay: () => void;
-  onLeave: () => void;
+  workedMinutes: number;
+  onContinue: () => void;
+  onLogout: () => void;
   onTimeout: () => void;
 }
 
@@ -22,10 +23,11 @@ function formatCountdown(msLeft: number): string {
 }
 
 export const WorkdayCheckModal: React.FC<WorkdayCheckModalProps> = ({
-  checkpoint,
+  kind,
   openedAt,
-  onStay,
-  onLeave,
+  workedMinutes,
+  onContinue,
+  onLogout,
   onTimeout,
 }) => {
   const [msLeft, setMsLeft] = useState(() => Math.max(0, openedAt + RESPONSE_TIMEOUT_MS - Date.now()));
@@ -46,23 +48,35 @@ export const WorkdayCheckModal: React.FC<WorkdayCheckModalProps> = ({
     return () => window.clearInterval(id);
   }, [openedAt, onTimeout]);
 
+  const isNine = kind === 'nine_hour';
+
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Office presence check">
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Working hours check">
       <div className="modal-card workday-check-modal">
-        <h2>Are you still in the office?</h2>
-        <p className="muted-text">
-          You have completed about <strong>{checkpointLabel(checkpoint)}</strong>. Confirm you are still
-          working, or log out now.
-        </p>
+        <h2>{isNine ? '9 hours completed' : 'Early logout'}</h2>
+        {isNine ? (
+          <p className="muted-text">
+            You have completed <strong>9 hours of work</strong>. Are you still working in the office?
+          </p>
+        ) : (
+          <p className="muted-text">
+            You have not completed your required <strong>9 working hours</strong> (currently{' '}
+            <strong>{earlyHoursLabel(workedMinutes)}</strong>). Are you still working, or do you want to log
+            out?
+          </p>
+        )}
         <p className="workday-check-countdown">
+          {isNine
+            ? 'If you confirm, you get 10 more minutes. '
+            : null}
           Auto logout in <strong>{formatCountdown(msLeft)}</strong> if there is no response
         </p>
         <div className="modal-actions workday-check-actions">
-          <button type="button" className="btn btn-primary" onClick={onStay}>
-            Yes — still in office
+          <button type="button" className="btn btn-primary" onClick={onContinue}>
+            {isNine ? 'Yes — still working (+10 min)' : 'Continue Working'}
           </button>
-          <button type="button" className="btn btn-secondary" onClick={onLeave}>
-            No — log me out
+          <button type="button" className="btn btn-secondary" onClick={onLogout}>
+            Logout
           </button>
         </div>
       </div>
