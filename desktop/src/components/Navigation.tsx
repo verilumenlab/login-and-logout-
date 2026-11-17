@@ -1,5 +1,5 @@
 import React from 'react';
-import { CalendarDays, Clock, LayoutDashboard, LogOut } from 'lucide-react';
+import { CalendarDays, Clock, KeyRound, LayoutDashboard, LogOut } from 'lucide-react';
 import { ScreenId, TrackerStatus, UserSession } from '../types';
 
 interface NavigationProps {
@@ -9,6 +9,7 @@ interface NavigationProps {
   tracker: TrackerStatus;
   onLogout: () => void;
   loggingOut: boolean;
+  onChangePassword?: () => void;
 }
 
 const NAV_ITEMS: { id: ScreenId; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
@@ -24,6 +25,7 @@ export const Navigation: React.FC<NavigationProps> = ({
   tracker,
   onLogout,
   loggingOut,
+  onChangePassword,
 }) => (
   <>
     <header className="app-topbar">
@@ -49,10 +51,18 @@ export const Navigation: React.FC<NavigationProps> = ({
           </div>
         </div>
       </div>
-      <button className="btn btn-secondary btn-sm" onClick={onLogout} disabled={loggingOut}>
-        <LogOut className="icon-xs" />
-        &nbsp;{loggingOut ? 'Signing out…' : 'Sign out'}
-      </button>
+      <div className="topbar-actions">
+        {onChangePassword && (
+          <button className="btn btn-secondary btn-sm" onClick={onChangePassword} title="Change password">
+            <KeyRound className="icon-xs" />
+            &nbsp;Password
+          </button>
+        )}
+        <button className="btn btn-secondary btn-sm" onClick={onLogout} disabled={loggingOut}>
+          <LogOut className="icon-xs" />
+          &nbsp;{loggingOut ? 'Signing out…' : 'Sign out'}
+        </button>
+      </div>
     </header>
 
     <nav className="app-bottom-nav">

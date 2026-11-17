@@ -45,6 +45,8 @@ class PresenceEventOut(BaseModel):
     occurred_at: datetime
     ssid: str | None = None
     attendance_action: str
+    # Optional label for break rows (e.g. "LUNCH · AUTO_IDLE · 45m").
+    detail: str | None = None
 
 
 class PresenceDay(BaseModel):

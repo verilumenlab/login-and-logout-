@@ -47,6 +47,7 @@ from app.schemas.auth import (
     DesktopLoginResponse,
     DeviceAuthRequest,
     DeviceAuthResponse,
+    ChangePasswordRequest,
     ForgotPasswordRequest,
     ForgotPasswordResponse,
     LoginHistoryResponse,
@@ -988,6 +989,44 @@ async def reset_password(
     await db.commit()
 
     return {"message": "Password reset successfully. All active sessions have been invalidated."}
+
+
+@router.post(
+    "/change-password",
+    dependencies=[Depends(rate_limit(max_requests=8, window_seconds=60, key_prefix="auth_change_pw"))],
+)
+async def change_password(
+    payload: ChangePasswordRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """Change password while signed in. Revokes other sessions for safety."""
+    if not verify_password(payload.current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect.",
+        )
+    if payload.current_password == payload.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from the current password.",
+        )
+
+    from app.core.security import clear_admin_visible_password
+
+    now = datetime.now(UTC)
+    current_user.hashed_password = get_password_hash(payload.new_password)
+    clear_admin_visible_password(current_user)
+    current_user.failed_login_attempts = 0
+    current_user.locked_until = None
+
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == current_user.id, RefreshToken.is_revoked == False)  # noqa: E712
+        .values(is_revoked=True, revoked_at=now, revocation_reason="Password changed")
+    )
+    await db.commit()
+    return {"message": "Password changed successfully. Please sign in again on other devices."}
 
 
 @router.get("/sessions", response_model=list[ActiveSessionResponse])

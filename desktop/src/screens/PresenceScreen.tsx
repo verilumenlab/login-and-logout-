@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, CloudOff, LogIn, LogOut, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import { ChevronDown, ChevronRight, CloudOff, Coffee, LogIn, LogOut, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 
 import { getPresenceHistory } from '../api/backend';
-import { PresenceDay, PresenceEventType, TrackerStatus } from '../types';
+import { PresenceDay, TrackerStatus } from '../types';
 import { formatDay, formatDuration, formatTime, toDateInput } from '../utils/format';
 
 interface PresenceScreenProps {
@@ -19,7 +19,7 @@ const RANGES: { id: RangeId; label: string }[] = [
   { id: 'month', label: 'This month' },
 ];
 
-const EVENT_LABELS: Record<PresenceEventType, string> = {
+const EVENT_LABELS: Record<string, string> = {
   APP_LOGIN: 'App sign-in',
   APP_LOGOUT: 'App sign-out',
   WIFI_CONNECTED: 'Wi-Fi connected',
@@ -28,6 +28,8 @@ const EVENT_LABELS: Record<PresenceEventType, string> = {
   SYSTEM_SUSPEND: 'Laptop sleep',
   SYSTEM_RESUME: 'Laptop wake',
   SYSTEM_STARTUP: 'Laptop power on',
+  BREAK_START: 'Break started',
+  BREAK_END: 'Break ended',
 };
 
 function rangeDates(range: RangeId): [string, string] {
@@ -43,9 +45,10 @@ function rangeDates(range: RangeId): [string, string] {
   return [toDateInput(start), toDateInput(end)];
 }
 
-function EventIcon({ type }: { type: PresenceEventType }) {
+function EventIcon({ type }: { type: string }) {
   if (type === 'WIFI_CONNECTED') return <Wifi className="icon-xs tone-green" />;
   if (type === 'WIFI_DISCONNECTED') return <WifiOff className="icon-xs tone-red" />;
+  if (type === 'BREAK_START' || type === 'BREAK_END') return <Coffee className="icon-xs tone-amber" />;
   if (type === 'APP_LOGIN') return <LogIn className="icon-xs tone-blue" />;
   return <LogOut className="icon-xs tone-slate" />;
 }
@@ -182,6 +185,10 @@ export const PresenceScreen: React.FC<PresenceScreenProps> = ({ tracker, dataVer
                                 <EventIcon type={ev.event_type} />
                                 <span>{EVENT_LABELS[ev.event_type] ?? ev.event_type}</span>
                                 {ev.ssid && <span className="muted-text">({ev.ssid})</span>}
+                                {ev.detail && <span className="muted-text">({ev.detail})</span>}
+                                {(ev.event_type === 'BREAK_START' || ev.event_type === 'BREAK_END') && (
+                                  <span className="badge badge-warning">break</span>
+                                )}
                                 {ev.attendance_action === 'CLOCK_IN' && <span className="badge badge-success">login</span>}
                                 {ev.attendance_action === 'CLOCK_OUT' && <span className="badge badge-neutral">logout</span>}
                               </li>

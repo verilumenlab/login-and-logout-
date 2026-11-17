@@ -10,13 +10,20 @@ from datetime import UTC, date, datetime, time, timedelta
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_password_hash
-from app.core.seeds import seed_organization_leave_types, seed_permissions, seed_system_roles
+from app.core.seeds import (
+    seed_organization_leave_types,
+    seed_organization_office_wifi,
+    seed_permissions,
+    seed_system_roles,
+)
 from app.models.auth import User
 from app.models.employee import EmployeeProfile, ManagerAssignment
 from app.models.leave import ApprovalStatus, LeaveRequest, LeaveStatus
+from app.models.office import Office, OfficeNetwork
 from app.models.organization import Organization
 
 
@@ -30,6 +37,14 @@ async def employee_env(db_session: AsyncSession, client: AsyncClient) -> dict:
     db_session.add(org)
     await db_session.flush()
     leave_types = await seed_organization_leave_types(db_session, org.id)
+    await seed_organization_office_wifi(db_session, org.id)
+    # Tests use "Office-5G" as the trusted office SSID.
+    office = (
+        await db_session.execute(select(Office).where(Office.organization_id == org.id, Office.code == "HQ"))
+    ).scalars().first()
+    assert office is not None
+    db_session.add(OfficeNetwork(office_id=office.id, name="Office-5G", ssid="Office-5G", is_active=True))
+    await db_session.flush()
 
     email = f"worker_{suffix}@presence.com"
     user = User(
@@ -180,6 +195,46 @@ async def test_rejects_future_old_and_naive_timestamps(client: AsyncClient, empl
         headers=headers,
     )
     assert naive.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_home_wifi_does_not_clock_in_or_out(client: AsyncClient, employee_env: dict):
+    """Personal/home SSIDs are audited only; only trusted office Wi-Fi affects attendance."""
+    headers = employee_env["headers"]
+    day = datetime.now(UTC).date() - timedelta(days=1)
+
+    home_in = await client.post(
+        "/api/v1/presence/events",
+        json={"events": [_event("WIFI_CONNECTED", _at(day, 10, 0), ssid="Home-WiFi")]},
+        headers=headers,
+    )
+    assert home_in.status_code == 200, home_in.text
+    assert home_in.json()["results"][0]["attendance_action"] == "NONE"
+    assert home_in.json()["is_logged_in"] is False
+
+    office_in = await client.post(
+        "/api/v1/presence/events",
+        json={"events": [_event("WIFI_CONNECTED", _at(day, 10, 5), ssid="Office-5G")]},
+        headers=headers,
+    )
+    assert office_in.json()["results"][0]["attendance_action"] == "CLOCK_IN"
+    assert office_in.json()["is_logged_in"] is True
+
+    home_out = await client.post(
+        "/api/v1/presence/events",
+        json={"events": [_event("WIFI_DISCONNECTED", _at(day, 18, 0), ssid="Home-WiFi")]},
+        headers=headers,
+    )
+    assert home_out.json()["results"][0]["attendance_action"] == "NONE"
+    assert home_out.json()["is_logged_in"] is True
+
+    office_out = await client.post(
+        "/api/v1/presence/events",
+        json={"events": [_event("WIFI_DISCONNECTED", _at(day, 18, 30), ssid="Office-5G")]},
+        headers=headers,
+    )
+    assert office_out.json()["results"][0]["attendance_action"] == "CLOCK_OUT"
+    assert office_out.json()["is_logged_in"] is False
 
 
 @pytest.mark.asyncio

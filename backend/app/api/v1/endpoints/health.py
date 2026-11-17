@@ -70,6 +70,8 @@ async def readiness_probe(
     smtp_user = (settings.SMTP_USER or "").strip()
     smtp_password_set = bool("".join((settings.SMTP_PASSWORD or "").split()))
     resend_key_set = bool((settings.RESEND_API_KEY or "").strip())
+    srots_key_set = bool((settings.SROTS_MAIL_API_KEY or "").strip())
+    srots_url = (settings.SROTS_MAIL_API_URL or "").strip()
 
     if provider == "smtp":
         delivers = bool(smtp_user and smtp_password_set and settings.SMTP_HOST)
@@ -84,10 +86,20 @@ async def readiness_probe(
         delivers = resend_key_set
         note = None if delivers else "EMAIL_PROVIDER=resend but RESEND_API_KEY is empty."
         email_status = "healthy" if delivers else "degraded"
+    elif provider in ("srots", "srots-mail", "srots_mail"):
+        delivers = bool(srots_key_set and srots_url)
+        note = None
+        if not delivers:
+            note = (
+                "EMAIL_PROVIDER=srots but SROTS_MAIL_API_KEY or SROTS_MAIL_API_URL is missing. "
+                "Create a key in srots-mail → Settings → Send API keys."
+            )
+        email_status = "healthy" if delivers else "degraded"
     else:
         delivers = False
         note = (
-            "EMAIL_PROVIDER=console only logs mail. Outbox may show SENT but nothing reaches an inbox."
+            "EMAIL_PROVIDER=console only logs mail. Outbox may show SENT but nothing reaches an inbox. "
+            "Set EMAIL_PROVIDER=srots with SROTS_MAIL_API_KEY to use srots-mail."
         )
         email_status = "degraded"
 
@@ -97,8 +109,15 @@ async def readiness_probe(
         "from_email": settings.DEFAULT_FROM_EMAIL,
         "smtp_user": smtp_user or None,
         "smtp_host": settings.SMTP_HOST if provider == "smtp" else None,
+        "srots_mail_api_url": srots_url if provider in ("srots", "srots-mail", "srots_mail") else None,
         "credentials_configured": (
-            smtp_password_set if provider == "smtp" else resend_key_set if provider == "resend" else False
+            smtp_password_set
+            if provider == "smtp"
+            else resend_key_set
+            if provider == "resend"
+            else srots_key_set
+            if provider in ("srots", "srots-mail", "srots_mail")
+            else False
         ),
         "delivers_to_inbox": delivers,
         "note": note,

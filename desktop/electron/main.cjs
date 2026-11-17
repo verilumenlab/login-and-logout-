@@ -24,6 +24,12 @@ function appIconPath() {
   return undefined;
 }
 
+function uiIndexPath() {
+  // Packaged: app.asar/dist/index.html (via app.getAppPath()).
+  // Dev packaged-path fallback: electron/../dist/index.html.
+  return path.join(app.getAppPath(), 'dist', 'index.html');
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 440,
@@ -42,12 +48,30 @@ function createWindow() {
     },
   });
 
-  win.once('ready-to-show', () => win.show());
+  const reveal = () => {
+    if (!win.isDestroyed() && !win.isVisible()) win.show();
+  };
+  win.once('ready-to-show', reveal);
+  // If HTML/assets fail to load, still show a window instead of staying invisible.
+  setTimeout(reveal, 4000);
+
+  win.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    console.error('[ui] did-fail-load', { code, desc, url });
+    reveal();
+    const message = encodeURIComponent(
+      `WorkPulse could not load its UI (${desc || code}). Reinstall the latest setup, or contact support.`
+    );
+    win.loadURL(`data:text/html,<h3 style="font-family:sans-serif;padding:24px">WorkPulse failed to open</h3><p style="font-family:sans-serif;padding:0 24px;color:#334155">${message}</p>`);
+  });
 
   if (isDev) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL || 'http://localhost:1420');
   } else {
-    win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+    const indexHtml = uiIndexPath();
+    win.loadFile(indexHtml).catch((err) => {
+      console.error('[ui] loadFile failed:', indexHtml, err);
+      reveal();
+    });
   }
 
   win.webContents.setWindowOpenHandler(({ url }) => {

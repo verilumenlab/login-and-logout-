@@ -130,9 +130,11 @@ export default function EmailHistoryPage() {
         <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-xs">
           <strong>Mail is not reaching inboxes.</strong> {mailNote}
           <div className="mt-1">
-            On Render → workpulse-api → Environment, set <code className="font-mono">EMAIL_PROVIDER=smtp</code> (Google)
-            or <code className="font-mono">resend</code>, then redeploy. Resend alone only updates the outbox until that
-            is configured.
+            On Render → workpulse-api → Environment, set{' '}
+            <code className="font-mono">EMAIL_PROVIDER=srots</code> and{' '}
+            <code className="font-mono">SROTS_MAIL_API_KEY</code> (from srots-mail → Settings → Send API keys), then
+            redeploy. Alternatives: <code className="font-mono">smtp</code> (Google) or{' '}
+            <code className="font-mono">resend</code>.
           </div>
         </div>
       )}

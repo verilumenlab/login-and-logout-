@@ -1,10 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, Eye, EyeOff, Loader2, Lock, Mail } from 'lucide-react';
-import { getBackendServerUrl, loginUser, rememberDeviceIdentifier, setBackendServerUrl } from '../api/backend';
+import { AlertCircle, CheckCircle2, Eye, EyeOff, Loader2, Lock, Mail } from 'lucide-react';
+import {
+  forgotPassword,
+  getBackendServerUrl,
+  loginUser,
+  resetPasswordWithOtp,
+  setBackendServerUrl,
+} from '../api/backend';
 import { clearSavedLogin, getSavedLogin, saveLoginCredentials } from '../api/savedLogin';
 import { DeviceInfo, UserSession } from '../types';
 
-const logoSrc = `${import.meta.env.BASE_URL}workpulse-logo.png`;
+const logoSrc = `${import.meta.env.BASE_URL}workpulse-mark.png`;
 
 interface LoginScreenProps {
   device: DeviceInfo | null;
@@ -12,14 +18,21 @@ interface LoginScreenProps {
   notice?: string | null;
 }
 
+type AuthMode = 'login' | 'forgot' | 'reset';
+
 export const LoginScreen: React.FC<LoginScreenProps> = ({ device, onLoginSuccess, notice }) => {
+  const [mode, setMode] = useState<AuthMode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [otp, setOtp] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [saveLogin, setSaveLogin] = useState(false);
   const [hasSavedLogin, setHasSavedLogin] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [credsReady, setCredsReady] = useState(false);
   const autoLoginTried = useRef(false);
 
@@ -49,8 +62,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ device, onLoginSuccess
     try {
       setLoading(true);
       setError(null);
+      setInfo(null);
       setBackendServerUrl(getBackendServerUrl());
-      rememberDeviceIdentifier(device.device_id);
       const session = await loginUser(emailValue.trim(), passwordValue, device);
       if (remember) {
         await saveLoginCredentials(emailValue.trim(), passwordValue);
@@ -67,18 +80,68 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ device, onLoginSuccess
     }
   };
 
-  // If credentials were saved earlier, signing in uses them as soon as the laptop is ready.
   useEffect(() => {
+    if (mode !== 'login') return;
     if (!credsReady || !device || !hasSavedLogin || autoLoginTried.current) return;
     if (!email.trim() || !password) return;
     autoLoginTried.current = true;
     void signIn(email, password, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [credsReady, device, hasSavedLogin, email, password]);
+  }, [mode, credsReady, device, hasSavedLogin, email, password]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await signIn(email, password, saveLogin);
+  };
+
+  const handleForgotSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setInfo(null);
+    if (!email.trim()) {
+      setError('Enter your work email.');
+      return;
+    }
+    setLoading(true);
+    try {
+      setBackendServerUrl(getBackendServerUrl());
+      const message = await forgotPassword(email.trim());
+      setInfo(message);
+      setMode('reset');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Could not start password reset');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResetSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setInfo(null);
+    if (!email.trim()) return setError('Enter your work email.');
+    if (otp.trim().length < 4) return setError('Enter the OTP / reset code from your email.');
+    if (newPassword.length < 8) return setError('New password must be at least 8 characters.');
+    if (newPassword !== confirmPassword) return setError('New password and confirmation do not match.');
+
+    setLoading(true);
+    try {
+      setBackendServerUrl(getBackendServerUrl());
+      const message = await resetPasswordWithOtp(email.trim(), otp.trim(), newPassword);
+      await clearSavedLogin();
+      setHasSavedLogin(false);
+      setSaveLogin(false);
+      setPassword(newPassword);
+      setOtp('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setInfo(`${message} You can sign in now.`);
+      setMode('login');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Could not reset password');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleClearSaved = async () => {
@@ -93,17 +156,23 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ device, onLoginSuccess
     <div className="login-wrapper">
       <div className="login-card">
         <div className="login-header">
-          <img className="brand-logo-full" src={logoSrc} alt="WorkPulse" />
+          <img className="brand-logo-mark" src={logoSrc} alt="WorkPulse" />
           <h2>WorkPulse Employee</h2>
-          <p className="subtitle">Sign in once — your login and logout are recorded automatically.</p>
+          <p className="subtitle">
+            {mode === 'login' && 'Sign in once — your login and logout are recorded automatically.'}
+            {mode === 'forgot' && 'We will email a reset code if this account exists.'}
+            {mode === 'reset' && 'Enter the email OTP / code and choose a new password.'}
+          </p>
         </div>
 
-        <div className="notice-box">
-          <AlertCircle className="icon-sm tone-amber" />
-          <span>
-            This app is for <strong>employee</strong> accounts only. Managers, HR and admins use the web portal.
-          </span>
-        </div>
+        {mode === 'login' && (
+          <div className="notice-box">
+            <AlertCircle className="icon-sm tone-amber" />
+            <span>
+              This app is for <strong>employee</strong> accounts only. Managers, HR and admins use the web portal.
+            </span>
+          </div>
+        )}
 
         {(error || notice) && (
           <div className="alert-error">
@@ -111,78 +180,223 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ device, onLoginSuccess
             <div className="text-xs">{error || notice}</div>
           </div>
         )}
-
-        <form onSubmit={handleSubmit} className="login-form">
-          <div className="form-group">
-            <label htmlFor="login-email">Work email</label>
-            <div className="input-group">
-              <Mail className="input-icon" />
-              <input
-                id="login-email"
-                type="email"
-                autoComplete="username"
-                placeholder="name@company.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
+        {info && (
+          <div className="alert-success text-xs">
+            <CheckCircle2 className="icon-xs" /> {info}
           </div>
+        )}
 
-          <div className="form-group">
-            <label htmlFor="login-password">Password</label>
-            <div className="input-group">
-              <Lock className="input-icon" />
-              <input
-                id="login-password"
-                type={showPassword ? 'text' : 'password'}
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
+        {mode === 'login' && (
+          <form onSubmit={handleLoginSubmit} className="login-form">
+            <div className="form-group">
+              <label htmlFor="login-email">Work email</label>
+              <div className="input-group">
+                <Mail className="input-icon" />
+                <input
+                  id="login-email"
+                  type="email"
+                  autoComplete="username"
+                  placeholder="name@company.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="login-password">Password</label>
+              <div className="input-group">
+                <Lock className="input-icon" />
+                <input
+                  id="login-password"
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                />
+                <button
+                  type="button"
+                  className="input-toggle"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  onClick={() => setShowPassword(!showPassword)}
+                >
+                  {showPassword ? <EyeOff className="icon-sm" /> : <Eye className="icon-sm" />}
+                </button>
+              </div>
+            </div>
+
+            <label className="checkbox-label login-save-label">
+              <input type="checkbox" checked={saveLogin} onChange={(e) => setSaveLogin(e.target.checked)} />
+              <span>Save email &amp; password on this laptop</span>
+            </label>
+
+            {hasSavedLogin && (
+              <div className="login-saved-row">
+                <span className="field-hint">Saved login ready — Sign in uses it automatically.</span>
+                <button type="button" className="text-link" onClick={() => void handleClearSaved()}>
+                  Clear saved
+                </button>
+              </div>
+            )}
+
+            <div className="login-row">
               <button
                 type="button"
-                className="input-toggle"
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-                onClick={() => setShowPassword(!showPassword)}
+                className="text-link"
+                onClick={() => {
+                  setMode('forgot');
+                  setError(null);
+                  setInfo(null);
+                }}
               >
-                {showPassword ? <EyeOff className="icon-sm" /> : <Eye className="icon-sm" />}
+                Forgot password?
               </button>
+              <span />
             </div>
-          </div>
 
-          <label className="checkbox-label login-save-label">
-            <input
-              type="checkbox"
-              checked={saveLogin}
-              onChange={(e) => setSaveLogin(e.target.checked)}
-            />
-            <span>Save email &amp; password on this laptop</span>
-          </label>
+            <button type="submit" disabled={loading || !device} className="btn btn-primary btn-block">
+              {loading ? (
+                <>
+                  <Loader2 className="icon-sm spin" />
+                  &nbsp;Signing in…
+                </>
+              ) : hasSavedLogin ? (
+                'Sign in with saved login'
+              ) : (
+                'Sign in'
+              )}
+            </button>
+          </form>
+        )}
 
-          {hasSavedLogin && (
-            <div className="login-saved-row">
-              <span className="field-hint">Saved login ready — Sign in uses it automatically.</span>
-              <button type="button" className="text-link" onClick={() => void handleClearSaved()}>
-                Clear saved
-              </button>
+        {mode === 'forgot' && (
+          <form onSubmit={handleForgotSubmit} className="login-form">
+            <div className="form-group">
+              <label htmlFor="forgot-email">Work email</label>
+              <div className="input-group">
+                <Mail className="input-icon" />
+                <input
+                  id="forgot-email"
+                  type="email"
+                  autoComplete="username"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
+              </div>
             </div>
-          )}
+            <button type="submit" disabled={loading} className="btn btn-primary btn-block">
+              {loading ? (
+                <>
+                  <Loader2 className="icon-sm spin" />
+                  &nbsp;Sending…
+                </>
+              ) : (
+                'Send reset code'
+              )}
+            </button>
+            <button
+              type="button"
+              className="text-link"
+              onClick={() => {
+                setMode('login');
+                setError(null);
+                setInfo(null);
+              }}
+            >
+              Back to sign in
+            </button>
+          </form>
+        )}
 
-          <button type="submit" disabled={loading || !device} className="btn btn-primary btn-block">
-            {loading ? (
-              <>
-                <Loader2 className="icon-sm spin" />
-                &nbsp;Signing in…
-              </>
-            ) : hasSavedLogin ? (
-              'Sign in with saved login'
-            ) : (
-              'Sign in'
-            )}
-          </button>
-        </form>
+        {mode === 'reset' && (
+          <form onSubmit={handleResetSubmit} className="login-form">
+            <div className="form-group">
+              <label htmlFor="reset-email">Work email</label>
+              <div className="input-group">
+                <Mail className="input-icon" />
+                <input
+                  id="reset-email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+            <div className="form-group">
+              <label htmlFor="reset-otp">OTP / reset code</label>
+              <div className="input-group">
+                <Lock className="input-icon" />
+                <input
+                  id="reset-otp"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="6-digit code"
+                  value={otp}
+                  onChange={(e) => setOtp(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+            <div className="form-group">
+              <label htmlFor="reset-new">New password</label>
+              <div className="input-group">
+                <Lock className="input-icon" />
+                <input
+                  id="reset-new"
+                  type={showPassword ? 'text' : 'password'}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  minLength={8}
+                  required
+                />
+              </div>
+            </div>
+            <div className="form-group">
+              <label htmlFor="reset-confirm">Confirm new password</label>
+              <div className="input-group">
+                <Lock className="input-icon" />
+                <input
+                  id="reset-confirm"
+                  type={showPassword ? 'text' : 'password'}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  minLength={8}
+                  required
+                />
+              </div>
+            </div>
+            <label className="checkbox-label">
+              <input type="checkbox" checked={showPassword} onChange={(e) => setShowPassword(e.target.checked)} />
+              <span>Show passwords</span>
+            </label>
+            <button type="submit" disabled={loading} className="btn btn-primary btn-block">
+              {loading ? (
+                <>
+                  <Loader2 className="icon-sm spin" />
+                  &nbsp;Updating…
+                </>
+              ) : (
+                'Set new password'
+              )}
+            </button>
+            <button
+              type="button"
+              className="text-link"
+              onClick={() => {
+                setMode('login');
+                setError(null);
+                setInfo(null);
+              }}
+            >
+              Back to sign in
+            </button>
+          </form>
+        )}
 
         {device && (
           <div className="login-footer">

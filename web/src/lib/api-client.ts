@@ -503,10 +503,18 @@ export interface TeamPresenceResponse {
 }
 
 export interface PresenceEvent {
-  event_type: 'APP_LOGIN' | 'APP_LOGOUT' | 'WIFI_CONNECTED' | 'WIFI_DISCONNECTED';
+  event_type:
+    | 'APP_LOGIN'
+    | 'APP_LOGOUT'
+    | 'WIFI_CONNECTED'
+    | 'WIFI_DISCONNECTED'
+    | 'BREAK_START'
+    | 'BREAK_END'
+    | string;
   occurred_at: string;
   ssid: string | null;
-  attendance_action: 'CLOCK_IN' | 'CLOCK_OUT' | 'NONE';
+  attendance_action: 'CLOCK_IN' | 'CLOCK_OUT' | 'NONE' | string;
+  detail?: string | null;
 }
 
 export interface PresenceDay {
@@ -728,6 +736,34 @@ export class ApiClient {
 
   async getCurrentUser(): Promise<AuthUser> {
     return this.request<AuthUser>('/auth/me');
+  }
+
+  async forgotPassword(email: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email: email.trim() }),
+    });
+  }
+
+  async resetPassword(email: string, tokenOrOtp: string, newPassword: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: email.trim(),
+        token_or_otp: tokenOrOtp.trim(),
+        new_password: newPassword,
+      }),
+    });
+  }
+
+  async changePassword(currentPassword: string, newPassword: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    });
   }
 
   // --- Employee presence (login & logout board) ---

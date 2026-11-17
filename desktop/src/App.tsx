@@ -7,6 +7,7 @@ import { bindBreakQueueToUser } from './attendance/breakTracker';
 import { bindQueueToUser } from './presence/tracker';
 import { usePresenceTracker } from './presence/usePresenceTracker';
 
+import { ChangePasswordModal } from './components/ChangePasswordModal';
 import { Navigation } from './components/Navigation';
 import { UpdateBanner } from './components/UpdateBanner';
 import { LoginScreen } from './screens/LoginScreen';
@@ -27,6 +28,7 @@ export default function App() {
   const [screen, setScreen] = useState<ScreenId>('dashboard');
   const [notice, setNotice] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
 
   useEffect(() => {
     getNativeDeviceInfo().then((info) => {
@@ -84,6 +86,7 @@ export default function App() {
         tracker={status}
         onLogout={handleLogout}
         loggingOut={loggingOut}
+        onChangePassword={() => setShowChangePassword(true)}
       />
       <UpdateBanner />
       <main className="app-main">
@@ -99,6 +102,9 @@ export default function App() {
         {screen === 'presence' && <PresenceScreen tracker={status} dataVersion={dataVersion} onSyncNow={refresh} />}
         {screen === 'leave' && <LeaveScreen dataVersion={dataVersion} />}
       </main>
+      {showChangePassword && (
+        <ChangePasswordModal email={session.email} onClose={() => setShowChangePassword(false)} />
+      )}
     </div>
   );
 }

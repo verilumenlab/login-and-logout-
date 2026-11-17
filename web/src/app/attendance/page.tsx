@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Clock, LogIn, LogOut, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import { ChevronDown, ChevronRight, Clock, Coffee, LogIn, LogOut, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 import { apiClient, PresenceDay, PresenceEvent, TeamPresenceRow } from '@/lib/api-client';
 import { formatDuration, formatTime, localDateInput, shiftDate } from '@/lib/format';
 
@@ -16,11 +16,14 @@ const EVENT_LABELS: Record<string, string> = {
   SYSTEM_SUSPEND: 'System sleep',
   SYSTEM_RESUME: 'System wake',
   SYSTEM_STARTUP: 'System startup',
+  BREAK_START: 'Break started',
+  BREAK_END: 'Break ended',
 };
 
 function EventIcon({ type }: { type: string }) {
   if (type === 'WIFI_CONNECTED') return <Wifi className="w-3.5 h-3.5 text-emerald-600" />;
   if (type === 'WIFI_DISCONNECTED') return <WifiOff className="w-3.5 h-3.5 text-rose-500" />;
+  if (type === 'BREAK_START' || type === 'BREAK_END') return <Coffee className="w-3.5 h-3.5 text-amber-600" />;
   if (type === 'APP_LOGIN' || type === 'SYSTEM_RESUME' || type === 'SYSTEM_STARTUP') {
     return <LogIn className="w-3.5 h-3.5 text-blue-600" />;
   }
@@ -276,6 +279,19 @@ export default function AttendancePage() {
                                 <EventIcon type={ev.event_type} />
                                 <span>{EVENT_LABELS[ev.event_type] ?? ev.event_type}</span>
                                 {ev.ssid && <span className="text-slate-500">({ev.ssid})</span>}
+                                {ev.detail && (
+                                  <span className="text-amber-700 dark:text-amber-300 text-[11px]">({ev.detail})</span>
+                                )}
+                                {ev.event_type === 'BREAK_START' && (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-semibold">
+                                    break
+                                  </span>
+                                )}
+                                {ev.event_type === 'BREAK_END' && (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-semibold">
+                                    break time
+                                  </span>
+                                )}
                                 {ev.attendance_action === 'CLOCK_IN' && (
                                   <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold">
                                     counted as login

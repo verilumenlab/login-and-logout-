@@ -44,12 +44,14 @@ export type PresenceEventType =
   | 'SYSTEM_SHUTDOWN'
   | 'SYSTEM_SUSPEND'
   | 'SYSTEM_RESUME'
-  | 'SYSTEM_STARTUP';
+  | 'SYSTEM_STARTUP'
+  | 'BREAK_START'
+  | 'BREAK_END';
 export type AttendanceAction = 'CLOCK_IN' | 'CLOCK_OUT' | 'NONE';
 
 export interface PresenceEventIn {
   client_event_id: string;
-  event_type: PresenceEventType;
+  event_type: Exclude<PresenceEventType, 'BREAK_START' | 'BREAK_END'>;
   occurred_at: string;
   ssid?: string | null;
   bssid?: string | null;
@@ -69,10 +71,11 @@ export interface PresenceSyncResponse {
 }
 
 export interface PresenceEventOut {
-  event_type: PresenceEventType;
+  event_type: PresenceEventType | string;
   occurred_at: string;
   ssid: string | null;
-  attendance_action: AttendanceAction;
+  attendance_action: AttendanceAction | string;
+  detail?: string | null;
 }
 
 export interface PresenceDay {

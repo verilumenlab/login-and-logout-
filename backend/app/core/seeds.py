@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.auth import Permission, Role, RolePermission
 from app.models.leave import LeaveBalance, LeaveCategory, LeaveType
+from app.models.office import Office, OfficeNetwork
 
 # 1. System Permissions Definitions
 PERMISSIONS_DATA: list[dict[str, str]] = [
@@ -386,6 +387,13 @@ DEPRECATED_LEAVE_TYPE_CODES: frozenset[str] = frozenset(
     {"MATERNITY", "PATERNITY", "BEREAVEMENT", "COMP_OFF", "UNPAID"}
 )
 
+# Trusted office Wi-Fi SSIDs used for presence login/logout (home Wi-Fi is ignored).
+DEFAULT_OFFICE_WIFI_NETWORKS: list[dict[str, str]] = [
+    {"name": "Work Nest 2.4G", "ssid": "Work Nest 2.4G"},
+    {"name": "Work Nest 5G", "ssid": "Work Nest 5G"},
+    {"name": "ACT Office", "ssid": "ACT-ai_102808162964"},
+]
+
 
 async def seed_permissions(db: AsyncSession) -> dict[str, Permission]:
     """Ensures all standard permissions exist in the database."""
@@ -517,3 +525,48 @@ async def seed_organization_leave_types(db: AsyncSession, organization_id: uuid.
             await db.flush()
 
     return leave_types
+
+
+async def seed_organization_office_wifi(db: AsyncSession, organization_id: uuid.UUID) -> Office:
+    """Ensure a primary office exists with the trusted office Wi-Fi SSIDs."""
+    result = await db.execute(
+        select(Office).where(
+            Office.organization_id == organization_id,
+            Office.code == "HQ",
+        )
+    )
+    office = result.scalars().first()
+    if not office:
+        office = Office(
+            organization_id=organization_id,
+            name="Head Office",
+            code="HQ",
+            address="Office",
+            timezone="Asia/Kolkata",
+            is_active=True,
+        )
+        db.add(office)
+        await db.flush()
+
+    for net in DEFAULT_OFFICE_WIFI_NETWORKS:
+        existing = await db.execute(
+            select(OfficeNetwork).where(
+                OfficeNetwork.office_id == office.id,
+                OfficeNetwork.ssid == net["ssid"],
+            )
+        )
+        row = existing.scalars().first()
+        if not row:
+            db.add(
+                OfficeNetwork(
+                    office_id=office.id,
+                    name=net["name"],
+                    ssid=net["ssid"],
+                    is_active=True,
+                )
+            )
+        elif not row.is_active:
+            row.is_active = True
+            row.name = net["name"]
+    await db.flush()
+    return office

@@ -539,7 +539,7 @@ async def create_employee(
         elif app_settings.EMAIL_PROVIDER.strip().lower() in ("", "console"):
             credentials_email_error = (
                 "Mail is in test mode on the server. Copy the password below and share it with the employee, "
-                "or set EMAIL_PROVIDER=resend (with RESEND_API_KEY) on Render."
+                "or set EMAIL_PROVIDER=srots with SROTS_MAIL_API_KEY on Render."
             )
         else:
             credentials_email_sent = True

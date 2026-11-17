@@ -177,6 +177,50 @@ interface EmployeeProfileInfo {
   department_name: string | null;
 }
 
+export async function forgotPassword(email: string): Promise<string> {
+  const res = await send(
+    '/auth/forgot-password',
+    { method: 'POST', body: JSON.stringify({ email: email.trim() }) },
+    null
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  const data = (await res.json()) as { message?: string };
+  return data.message || 'If an account exists, reset instructions were sent.';
+}
+
+export async function resetPasswordWithOtp(
+  email: string,
+  otp: string,
+  newPassword: string
+): Promise<string> {
+  const res = await send(
+    '/auth/reset-password',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        email: email.trim(),
+        token_or_otp: otp.trim(),
+        new_password: newPassword,
+      }),
+    },
+    null
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  const data = (await res.json()) as { message?: string };
+  return data.message || 'Password reset successfully.';
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<string> {
+  const data = await request<{ message?: string }>('/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+  return data.message || 'Password changed successfully.';
+}
+
 export async function loginUser(email: string, password: string, device: DeviceInfo): Promise<UserSession> {
   const res = await send(
     '/auth/desktop-login',

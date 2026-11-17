@@ -1,7 +1,7 @@
 {
   "name": "workpulse-employee",
   "private": true,
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "WorkPulse Employee Windows desktop application",
   "author": "Verilumen Lab",
   "main": "electron/main.cjs",
@@ -49,8 +49,15 @@
       "public/workpulse-logo.png",
       "public/workpulse-mark.png"
     ],
+    "extraResources": [
+      {
+        "from": "build/icon.ico",
+        "to": "app.ico"
+      }
+    ],
     "extraMetadata": {
-      "main": "electron/main.cjs"
+      "main": "electron/main.cjs",
+      "type": "commonjs"
     },
     "win": {
       "icon": "build/icon.ico",
@@ -63,7 +70,7 @@
         }
       ],
       "artifactName": "WorkPulse-Employee-Setup-${version}.${ext}",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": true
     },
     "forceCodeSigning": false,
     "nsis": {

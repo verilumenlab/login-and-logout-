@@ -25,7 +25,11 @@ from sqlalchemy import func, select
 
 from app.core.database import AsyncSessionLocal
 from app.core.security import get_password_hash
-from app.core.seeds import seed_organization_leave_types, seed_system_roles
+from app.core.seeds import (
+    seed_organization_leave_types,
+    seed_organization_office_wifi,
+    seed_system_roles,
+)
 from app.models.auth import User
 from app.models.employee import EmployeeProfile, EmploymentStatus
 from app.models.organization import Organization
@@ -44,9 +48,10 @@ async def bootstrap() -> int:
             orgs = (await db.execute(select(Organization))).scalars().all()
             for org in orgs:
                 await seed_organization_leave_types(db, org.id)
+                await seed_organization_office_wifi(db, org.id)
             await db.commit()
             logger.info(
-                "Database already set up (%s organization(s)); roles and leave types refreshed.",
+                "Database already set up (%s organization(s)); roles, leave types, and office Wi-Fi refreshed.",
                 org_count,
             )
             return 0
@@ -71,6 +76,7 @@ async def bootstrap() -> int:
         db.add(org)
         await db.flush()
         await seed_organization_leave_types(db, org.id)
+        await seed_organization_office_wifi(db, org.id)
 
         admin = User(
             organization_id=org.id,

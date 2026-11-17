@@ -29,6 +29,10 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const [mode, setMode] = useState<'login' | 'forgot' | 'reset'>('login');
+  const [otp, setOtp] = useState('');
+  const [newPassword, setNewPassword] = useState('');
   const [server, setServer] = useState<'checking' | 'online' | 'offline'>('checking');
 
   useEffect(() => {
@@ -51,6 +55,7 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setInfo(null);
     try {
       const res = await apiClient.login(email.trim(), password);
       if (!normalizeRole(res.user.role, res.user.is_superuser)) {
@@ -66,6 +71,42 @@ export default function LoginPage() {
     }
   };
 
+  const handleForgot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const res = await apiClient.forgotPassword(email.trim());
+      setInfo(res.message);
+      setMode('reset');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Could not start password reset.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    setInfo(null);
+    try {
+      if (newPassword.length < 8) throw new Error('New password must be at least 8 characters.');
+      const res = await apiClient.resetPassword(email.trim(), otp.trim(), newPassword);
+      setInfo(`${res.message} You can sign in now.`);
+      setPassword('');
+      setOtp('');
+      setNewPassword('');
+      setMode('login');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Could not reset password.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const message = error || sessionMessage;
 
   return (
@@ -75,7 +116,9 @@ export default function LoginPage() {
           <div className="flex justify-center">
             <BrandLogo href={null} variant="full" size="md" showTagline={false} />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Sign in to WorkPulse</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+            {mode === 'login' ? 'Sign in to WorkPulse' : mode === 'forgot' ? 'Forgot password' : 'Reset password'}
+          </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">For administrators, HR and managers</p>
         </div>
 
@@ -127,68 +170,163 @@ export default function LoginPage() {
             <span>{message}</span>
           </div>
         )}
-
-        <form onSubmit={handleLogin} className="space-y-4">
-          <div>
-            <label htmlFor="email" className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-              Work email
-            </label>
-            <div className="relative mt-1">
-              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-              <input
-                id="email"
-                type="email"
-                required
-                autoComplete="username"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="name@company.com"
-                className="block w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent"
-              />
-            </div>
+        {info && (
+          <div
+            role="status"
+            className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 text-emerald-700 dark:text-emerald-300 text-xs flex items-start gap-2"
+          >
+            <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <span>{info}</span>
           </div>
+        )}
 
-          <div>
-            <label htmlFor="password" className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-              Password
-            </label>
-            <div className="relative mt-1">
-              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-              <input
-                id="password"
-                type={showPassword ? 'text' : 'password'}
-                required
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="block w-full pl-9 pr-10 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent"
-              />
+        {mode === 'login' && (
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label htmlFor="email" className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                Work email
+              </label>
+              <div className="relative mt-1">
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                <input
+                  id="email"
+                  type="email"
+                  required
+                  autoComplete="username"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@company.com"
+                  className="block w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="password" className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                Password
+              </label>
+              <div className="relative mt-1">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                <input
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="block w-full pl-9 pr-10 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
               <button
                 type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-                className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                className="text-xs text-blue-600 hover:underline"
+                onClick={() => {
+                  setMode('forgot');
+                  setError(null);
+                  setInfo(null);
+                }}
               >
-                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                Forgot password?
               </button>
             </div>
-          </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-600 disabled:opacity-50 transition"
-          >
-            {loading ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Signing in…
-              </>
-            ) : (
-              'Sign in'
-            )}
-          </button>
-        </form>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-600 disabled:opacity-50 transition"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Signing in…
+                </>
+              ) : (
+                'Sign in'
+              )}
+            </button>
+          </form>
+        )}
+
+        {mode === 'forgot' && (
+          <form onSubmit={handleForgot} className="space-y-4">
+            <div>
+              <label htmlFor="forgot-email" className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                Work email
+              </label>
+              <input
+                id="forgot-email"
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="mt-1 block w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-2.5 rounded-xl text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+            >
+              {loading ? 'Sending…' : 'Send reset code'}
+            </button>
+            <button type="button" className="w-full text-xs text-blue-600" onClick={() => setMode('login')}>
+              Back to sign in
+            </button>
+          </form>
+        )}
+
+        {mode === 'reset' && (
+          <form onSubmit={handleReset} className="space-y-4">
+            <div>
+              <label htmlFor="reset-otp" className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                OTP / reset code
+              </label>
+              <input
+                id="reset-otp"
+                type="text"
+                required
+                value={otp}
+                onChange={(e) => setOtp(e.target.value)}
+                className="mt-1 block w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800"
+              />
+            </div>
+            <div>
+              <label htmlFor="reset-new" className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                New password
+              </label>
+              <input
+                id="reset-new"
+                type="password"
+                required
+                minLength={8}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="mt-1 block w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-2.5 rounded-xl text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+            >
+              {loading ? 'Updating…' : 'Set new password'}
+            </button>
+            <button type="button" className="w-full text-xs text-blue-600" onClick={() => setMode('login')}>
+              Back to sign in
+            </button>
+          </form>
+        )}
 
         <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
           <span
