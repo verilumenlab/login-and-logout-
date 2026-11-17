@@ -149,8 +149,8 @@ export default function PresencePage() {
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
             {data?.scope === 'TEAM' ? 'Your direct reports. ' : 'All employees. '}
-            Login is the first desktop-app sign-in or laptop Wi-Fi connection; logout is the last sign-out or Wi-Fi
-            disconnection. Export weekly (Mon–Fri) or monthly attendance CSV from the selected date.
+            Office hours 9:30 AM – 6:30 PM (9h). Login grace until 10:30 AM. After 7h and 9h the app asks “still in
+            office?” — no reply in 10 minutes auto-logs out (shown under Logout).
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -300,7 +300,18 @@ export default function PresencePage() {
                   </td>
                   <td className="px-4 py-3 font-semibold tabular-nums">{formatTime(r.first_login)}</td>
                   <td className="px-4 py-3 tabular-nums">
-                    {r.status === 'LOGGED_IN' ? <span className="text-emerald-600">Active</span> : formatTime(r.last_logout)}
+                    {r.status === 'LOGGED_IN' ? (
+                      <span className="text-emerald-600">Active</span>
+                    ) : (
+                      <div>
+                        <div>{formatTime(r.last_logout)}</div>
+                        {r.logout_note && (
+                          <div className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 max-w-[180px] leading-snug">
+                            {r.logout_note}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums">{r.first_login ? formatDuration(displayMinutes(r, date)) : '—'}</td>
                   <td className="px-4 py-3">

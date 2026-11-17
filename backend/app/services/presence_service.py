@@ -155,6 +155,8 @@ async def _clock_in(
 
 
 def _describe(event: PresenceEventIn) -> str:
+    if event.detail and event.detail.strip():
+        return event.detail.strip()[:500]
     labels = {
         PresenceEventType.APP_LOGIN: "Desktop app login",
         PresenceEventType.APP_LOGOUT: "Desktop app logout",
@@ -167,6 +169,19 @@ def _describe(event: PresenceEventIn) -> str:
     }
     label = labels.get(event.event_type, str(event.event_type))
     return f"{label} ({event.ssid})" if event.ssid else label
+
+
+def _last_clock_out_note(day: AttendanceDay) -> str | None:
+    outs = [
+        e
+        for e in (day.events or [])
+        if getattr(e.event_type, "value", e.event_type) in ("CLOCK_OUT", AttendanceEventType.CLOCK_OUT)
+    ]
+    if not outs:
+        return None
+    last = max(outs, key=lambda e: ensure_utc(e.timestamp) or datetime.min.replace(tzinfo=UTC))
+    note = (last.notes or "").strip()
+    return note or None
 
 
 def _wifi_display_from_events(events: list[PresenceEvent]) -> tuple[datetime | None, list[str]]:
@@ -724,6 +739,7 @@ async def get_team_presence(
                     now=now,
                     stored_minutes=att.total_work_minutes or 0,
                 )
+                row.logout_note = _last_clock_out_note(att)
 
         leave = leave_by_emp.get(emp.id)
         if leave is not None:

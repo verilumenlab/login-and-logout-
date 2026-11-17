@@ -72,7 +72,12 @@ function startOfTodayIso(): string {
   return d.toISOString();
 }
 
-export function queueAppEvent(type: Extract<PresenceEventType, 'APP_LOGIN' | 'APP_LOGOUT'>, deviceId: string, ssid?: string): void {
+export function queueAppEvent(
+  type: Extract<PresenceEventType, 'APP_LOGIN' | 'APP_LOGOUT'>,
+  deviceId: string,
+  ssid?: string,
+  detail?: string | null
+): void {
   const now = new Date();
   enqueue([
     {
@@ -81,6 +86,7 @@ export function queueAppEvent(type: Extract<PresenceEventType, 'APP_LOGIN' | 'AP
       occurred_at: now.toISOString(),
       ssid: ssid || null,
       device_id: deviceId,
+      detail: detail || null,
     },
   ]);
 }

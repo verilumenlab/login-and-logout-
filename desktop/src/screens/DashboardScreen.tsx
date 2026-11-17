@@ -24,6 +24,7 @@ interface DashboardScreenProps {
   breakStatus?: BreakTrackerStatus;
   onWorkLogin?: () => Promise<void>;
   onWorkLogout?: () => Promise<void>;
+  onFirstLoginKnown?: (iso: string) => void;
 }
 
 function available(b: LeaveBalance): number {
@@ -36,6 +37,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   breakStatus,
   onWorkLogin,
   onWorkLogout,
+  onFirstLoginKnown,
 }) => {
   const currentMonth = monthKey(new Date());
   const [month, setMonth] = useState(currentMonth);
@@ -53,6 +55,9 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
         getLeaveBalances().catch(() => [] as LeaveBalance[]),
       ]);
       setSummary(presence);
+      if (presence.today?.first_login) {
+        onFirstLoginKnown?.(presence.today.first_login);
+      }
       setBalances(
         leaveBalances.filter((b) =>
           ['ANNUAL', 'SICK', 'CASUAL'].includes((b.leave_type_code || '').toUpperCase())
@@ -64,7 +69,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [month]);
+  }, [month, onFirstLoginKnown]);
 
   useEffect(() => {
     void load(false);

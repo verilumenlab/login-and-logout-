@@ -171,7 +171,9 @@ def is_overnight_schedule(schedule: WorkSchedule | None) -> bool:
 def calculate_schedule_expected_minutes(schedule: WorkSchedule | None) -> int:
     """Returns total expected working minutes for a scheduled shift."""
     if not schedule or not schedule.shift_start_time or not schedule.shift_end_time:
-        return 8 * 60  # Default 8 hours (480 minutes)
+        from app.core.office_policy import EXPECTED_WORK_MINUTES
+
+        return EXPECTED_WORK_MINUTES  # Default full office day (9 hours)
 
     start_m = schedule.shift_start_time.hour * 60 + schedule.shift_start_time.minute
     end_m = schedule.shift_end_time.hour * 60 + schedule.shift_end_time.minute

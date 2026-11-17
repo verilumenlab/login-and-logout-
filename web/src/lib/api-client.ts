@@ -492,6 +492,7 @@ export interface TeamPresenceRow {
   wifi_networks: string[];
   last_signal_at: string | null;
   leave_type_name: string | null;
+  logout_note?: string | null;
 }
 
 export interface TeamPresenceResponse {

@@ -23,6 +23,17 @@ import {
 import { DeviceInfo, PresenceEventIn, TrackerStatus, UserSession } from '../types';
 import { endOfDayLabel, evaluateEndOfDayLogout } from './endOfDayLogout';
 import {
+  WorkdayCheckpoint,
+  WorkdayLogoutReason,
+  clearWorkdaySession,
+  getPromptOpenedAt,
+  logoutReasonLabel,
+  markPromptOpened,
+  nextDueCheckpoint,
+  syncWorkStart,
+  workedMinutesNow,
+} from './workdayPolicy';
+import {
   collectWifiEvents,
   enqueuePresenceEvent,
   flushQueue,
@@ -42,17 +53,23 @@ export type BreakTrackerStatus = {
   pendingBreakEvents: number;
 };
 
+export type WorkdayCheckRequest = {
+  checkpoint: WorkdayCheckpoint;
+  openedAt: number;
+};
+
 /**
  * Runs automatic login/logout tracking while an employee is signed in.
  * Also consumes laptop power events and drives automatic break tracking
- * (idle / lock / sleep).
+ * (idle / lock / sleep), plus 7h/9h office presence checks.
  */
 export function usePresenceTracker(
   device: DeviceInfo | null,
   active: boolean,
   onSessionExpired: (reason?: 'expired' | 'blocked') => void,
   session: UserSession | null = null,
-  onNotice?: (message: string) => void
+  onNotice?: (message: string) => void,
+  onWorkdayCheck?: (request: WorkdayCheckRequest | null) => void
 ) {
   const [status, setStatus] = useState<TrackerStatus>({
     isOnline: true,
@@ -74,6 +91,8 @@ export function usePresenceTracker(
   const loggedInRef = useRef<boolean | null>(null);
   const noticeRef = useRef(onNotice);
   noticeRef.current = onNotice;
+  const workdayCheckRef = useRef(onWorkdayCheck);
+  workdayCheckRef.current = onWorkdayCheck;
 
   const refreshBreakStatus = useCallback(() => {
     const open = getOpenBreak();
@@ -85,6 +104,28 @@ export function usePresenceTracker(
       pendingBreakEvents: pendingBreakCount(),
     });
   }, []);
+
+  const performWorkLogout = useCallback(
+    async (reason?: WorkdayLogoutReason | null) => {
+      if (!device) return false;
+      endAutoBreak(device.device_id);
+      const wifiNow = await getConnectedWifiInfo();
+      const detail = reason ? logoutReasonLabel(reason) : null;
+      queueAppEvent('APP_LOGOUT', device.device_id, wifiNow.is_wifi ? wifiNow.ssid : undefined, detail);
+      clearWorkdaySession();
+      workdayCheckRef.current?.(null);
+      try {
+        await flushBreakQueue();
+        await flushQueue();
+        loggedInRef.current = false;
+        return true;
+      } catch {
+        loggedInRef.current = false;
+        return false;
+      }
+    },
+    [device]
+  );
 
   const tick = useCallback(async () => {
     if (!device || running.current) return;
@@ -98,6 +139,7 @@ export function usePresenceTracker(
         appLoginQueued.current = true;
         await collectWifiEvents(device.device_id, device.os_type);
         queueAppEvent('APP_LOGIN', device.device_id, wifi.is_wifi ? wifi.ssid : undefined);
+        syncWorkStart(new Date());
       } else {
         await collectWifiEvents(device.device_id, device.os_type);
       }
@@ -121,20 +163,28 @@ export function usePresenceTracker(
         }
       }
 
-      // 6:30 PM check: idle → auto work-logout; still using → notify once.
       const workOpen = isLoggedIn ?? loggedInRef.current;
       if (workOpen === true) {
+        // 7h / 9h office presence confirmation (10 min to reply).
+        const due = nextDueCheckpoint(workedMinutesNow());
+        if (due) {
+          const alreadyOpen = getPromptOpenedAt(due);
+          markPromptOpened(due);
+          const openedAt = getPromptOpenedAt(due) || Date.now();
+          workdayCheckRef.current?.({ checkpoint: due, openedAt });
+          if (!alreadyOpen) {
+            void showDesktopNotification(
+              'WorkPulse — Still in office?',
+              `You have reached about ${due === '9h' ? '9' : '7'} hours. Please confirm in the app within 10 minutes.`
+            );
+          }
+        }
+
+        // 6:30 PM idle hard stop.
         const eod = await evaluateEndOfDayLogout({ isWorkLoggedIn: true });
         if (eod.action === 'auto_logout') {
-          endAutoBreak(device.device_id);
-          const wifiNow = await getConnectedWifiInfo();
-          queueAppEvent('APP_LOGOUT', device.device_id, wifiNow.is_wifi ? wifiNow.ssid : undefined);
-          try {
-            await flushBreakQueue();
-            isLoggedIn = await flushQueue();
-          } catch {
-            isLoggedIn = false;
-          }
+          await performWorkLogout('eod_idle');
+          isLoggedIn = false;
           const msg = `Auto logged out at ${endOfDayLabel()} — laptop was idle (not in use).`;
           noticeRef.current?.(msg);
           void showDesktopNotification('WorkPulse — Auto logout', msg);
@@ -143,6 +193,8 @@ export function usePresenceTracker(
           noticeRef.current?.(msg);
           void showDesktopNotification('WorkPulse — Still working?', msg);
         }
+      } else if (workOpen === false) {
+        workdayCheckRef.current?.(null);
       }
 
       const nextLoggedIn = isLoggedIn ?? loggedInRef.current;
@@ -155,7 +207,6 @@ export function usePresenceTracker(
         isLoggedIn: nextLoggedIn,
       });
       refreshBreakStatus();
-      // Always bump so Dashboard / Leave / Login history auto-refresh.
       setVersion((v) => v + 1);
     } catch (err) {
       if (err instanceof DeviceBlockedError) {
@@ -168,9 +219,8 @@ export function usePresenceTracker(
     } finally {
       running.current = false;
     }
-  }, [device, onSessionExpired, refreshBreakStatus]);
+  }, [device, onSessionExpired, refreshBreakStatus, performWorkLogout]);
 
-  // Tell Electron main whether a signed-in employee session exists (for powerMonitor attribution).
   useEffect(() => {
     if (!active || !device || !session) {
       void setPresenceSession({ signedIn: false, deviceId: null, userId: null });
@@ -184,7 +234,6 @@ export function usePresenceTracker(
     });
   }, [active, device, session]);
 
-  // Live power events while the window is open.
   useEffect(() => {
     if (!active || !device) return;
     const unsubscribe = onPowerEventQueued((event: PresenceEventIn) => {
@@ -194,7 +243,6 @@ export function usePresenceTracker(
     return unsubscribe;
   }, [active, device, tick]);
 
-  // Lock / unlock / sleep break signals
   useEffect(() => {
     if (!active || !device) return;
     const unsubscribe = onBreakAwayQueued((payload: BreakAwayPayload) => {
@@ -225,7 +273,6 @@ export function usePresenceTracker(
     };
   }, [active, device, tick]);
 
-  /** Records the app sign-out and tries to deliver it before the tokens are cleared. */
   const recordAppLogout = useCallback(async () => {
     if (!device) return;
     endAutoBreak(device.device_id);
@@ -233,6 +280,8 @@ export function usePresenceTracker(
     const wifi = await getConnectedWifiInfo();
     await collectWifiEvents(device.device_id, device.os_type);
     queueAppEvent('APP_LOGOUT', device.device_id, wifi.is_wifi ? wifi.ssid : undefined);
+    clearWorkdaySession();
+    workdayCheckRef.current?.(null);
     try {
       await flushBreakQueue();
       await flushQueue();
@@ -241,31 +290,26 @@ export function usePresenceTracker(
     }
   }, [device]);
 
-  /** Manual work login (clock-in) while staying signed into the app. */
   const recordWorkLogin = useCallback(async () => {
     if (!device) return;
     const wifi = await getConnectedWifiInfo();
     queueAppEvent('APP_LOGIN', device.device_id, wifi.is_wifi ? wifi.ssid : undefined);
+    syncWorkStart(new Date());
     await flushQueue();
+    loggedInRef.current = true;
     setVersion((v) => v + 1);
     await tick();
   }, [device, tick]);
 
-  /** Manual work logout (clock-out) while staying signed into the app. */
-  const recordWorkLogout = useCallback(async () => {
-    if (!device) return;
-    endAutoBreak(device.device_id);
-    const wifi = await getConnectedWifiInfo();
-    queueAppEvent('APP_LOGOUT', device.device_id, wifi.is_wifi ? wifi.ssid : undefined);
-    try {
-      await flushBreakQueue();
-      await flushQueue();
-    } catch {
-      // queued for later
-    }
-    setVersion((v) => v + 1);
-    await tick();
-  }, [device, tick]);
+  const recordWorkLogout = useCallback(
+    async (reason?: WorkdayLogoutReason | null) => {
+      if (!device) return;
+      await performWorkLogout(reason ?? null);
+      setVersion((v) => v + 1);
+      await tick();
+    },
+    [device, performWorkLogout, tick]
+  );
 
   return {
     status,
@@ -275,5 +319,6 @@ export function usePresenceTracker(
     recordAppLogout,
     recordWorkLogin,
     recordWorkLogout,
+    syncWorkStartFromServer: syncWorkStart,
   };
 }

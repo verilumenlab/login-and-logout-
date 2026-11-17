@@ -5,9 +5,14 @@ import { getNativeDeviceInfo, setUpdateContext } from './api/ipc';
 import { clearLocalSession, getStoredUserSession, logoutUser, rememberDeviceIdentifier } from './api/backend';
 import { bindBreakQueueToUser } from './attendance/breakTracker';
 import { bindQueueToUser } from './presence/tracker';
-import { usePresenceTracker } from './presence/usePresenceTracker';
+import { usePresenceTracker, WorkdayCheckRequest } from './presence/usePresenceTracker';
+import {
+  logoutReasonForTimeout,
+  markCheckpointConfirmed,
+} from './presence/workdayPolicy';
 
 import { ChangePasswordModal } from './components/ChangePasswordModal';
+import { WorkdayCheckModal } from './components/WorkdayCheckModal';
 import { Navigation } from './components/Navigation';
 import { UpdateBanner } from './components/UpdateBanner';
 import { LoginScreen } from './screens/LoginScreen';
@@ -29,6 +34,7 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [workdayCheck, setWorkdayCheck] = useState<WorkdayCheckRequest | null>(null);
 
   useEffect(() => {
     getNativeDeviceInfo().then((info) => {
@@ -40,6 +46,7 @@ export default function App() {
   const handleSessionExpired = useCallback((reason?: 'expired' | 'blocked') => {
     clearLocalSession();
     setSession(null);
+    setWorkdayCheck(null);
     setNotice(
       reason === 'blocked'
         ? 'This device was blocked by an administrator. Contact HR/Admin to resume access.'
@@ -47,8 +54,8 @@ export default function App() {
     );
   }, []);
 
-  const { status, breakStatus, dataVersion, refresh, recordAppLogout, recordWorkLogin, recordWorkLogout } =
-    usePresenceTracker(device, session !== null, handleSessionExpired, session, setNotice);
+  const { status, breakStatus, dataVersion, refresh, recordAppLogout, recordWorkLogin, recordWorkLogout, syncWorkStartFromServer } =
+    usePresenceTracker(device, session !== null, handleSessionExpired, session, setNotice, setWorkdayCheck);
 
   const handleLogin = (newSession: UserSession) => {
     bindQueueToUser(newSession.user_id);
@@ -69,9 +76,39 @@ export default function App() {
       await logoutUser();
     } finally {
       setLoggingOut(false);
+      setWorkdayCheck(null);
       setSession(null);
     }
   };
+
+  const handleStayInOffice = useCallback(() => {
+    if (!workdayCheck) return;
+    markCheckpointConfirmed(workdayCheck.checkpoint);
+    setWorkdayCheck(null);
+    setNotice(
+      workdayCheck.checkpoint === '9h'
+        ? 'Thanks — marked as still in office after 9 hours. Log out when you finish.'
+        : 'Thanks — marked as still in office after 7 hours.'
+    );
+  }, [workdayCheck]);
+
+  const handleLeaveOffice = useCallback(async () => {
+    setWorkdayCheck(null);
+    await recordWorkLogout('still_in_office_no');
+    setNotice('Logged out — you confirmed you are not in the office.');
+  }, [recordWorkLogout]);
+
+  const handleCheckTimeout = useCallback(async () => {
+    if (!workdayCheck) return;
+    const reason = logoutReasonForTimeout(workdayCheck.checkpoint);
+    setWorkdayCheck(null);
+    await recordWorkLogout(reason);
+    setNotice(
+      reason === 'no_response_9h'
+        ? 'Auto logged out — no response after the 9-hour office check.'
+        : 'Auto logged out — no response after the 7-hour office check.'
+    );
+  }, [workdayCheck, recordWorkLogout]);
 
   if (!session) {
     return <LoginScreen device={device} onLoginSuccess={handleLogin} notice={notice} />;
@@ -104,7 +141,8 @@ export default function App() {
             dataVersion={dataVersion}
             breakStatus={breakStatus}
             onWorkLogin={recordWorkLogin}
-            onWorkLogout={recordWorkLogout}
+            onWorkLogout={() => recordWorkLogout()}
+            onFirstLoginKnown={syncWorkStartFromServer}
           />
         )}
         {screen === 'presence' && <PresenceScreen tracker={status} dataVersion={dataVersion} onSyncNow={refresh} />}
@@ -112,6 +150,15 @@ export default function App() {
       </main>
       {showChangePassword && (
         <ChangePasswordModal email={session.email} onClose={() => setShowChangePassword(false)} />
+      )}
+      {workdayCheck && (
+        <WorkdayCheckModal
+          checkpoint={workdayCheck.checkpoint}
+          openedAt={workdayCheck.openedAt}
+          onStay={handleStayInOffice}
+          onLeave={() => void handleLeaveOffice()}
+          onTimeout={() => void handleCheckTimeout()}
+        />
       )}
     </div>
   );

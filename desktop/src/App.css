@@ -166,6 +166,27 @@ button {
   padding: 0 2px;
 }
 
+.workday-check-modal h2 {
+  font-size: 16px;
+  margin-bottom: 8px;
+}
+
+.workday-check-countdown {
+  margin: 12px 0 16px;
+  padding: 10px 12px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  color: #9a3412;
+  font-size: 13px;
+}
+
+.workday-check-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .app-topbar {
   display: flex;
   align-items: center;

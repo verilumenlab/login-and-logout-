@@ -20,6 +20,8 @@ class PresenceEventIn(BaseModel):
     ssid: str | None = Field(default=None, max_length=255)
     bssid: str | None = Field(default=None, max_length=64)
     device_id: str | None = Field(default=None, max_length=255)
+    # Optional human note (e.g. auto-logout reason) stored on the attendance event.
+    detail: str | None = Field(default=None, max_length=500)
 
 
 class PresenceSyncRequest(BaseModel):
@@ -94,6 +96,8 @@ class TeamPresenceRow(BaseModel):
     wifi_networks: list[str] = Field(default_factory=list)
     last_signal_at: datetime | None = None
     leave_type_name: str | None = None
+    # Last clock-out note (e.g. no response after 7h/9h office check).
+    logout_note: str | None = None
 
 
 class TeamPresenceCounts(BaseModel):

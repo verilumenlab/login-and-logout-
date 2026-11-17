@@ -28,6 +28,7 @@ from app.core.security import get_password_hash
 from app.core.seeds import (
     seed_organization_leave_types,
     seed_organization_office_wifi,
+    seed_organization_work_schedule,
     seed_system_roles,
 )
 from app.models.auth import User
@@ -49,9 +50,10 @@ async def bootstrap() -> int:
             for org in orgs:
                 await seed_organization_leave_types(db, org.id)
                 await seed_organization_office_wifi(db, org.id)
+                await seed_organization_work_schedule(db, org.id)
             await db.commit()
             logger.info(
-                "Database already set up (%s organization(s)); roles, leave types, and office Wi-Fi refreshed.",
+                "Database already set up (%s organization(s)); roles, leave types, office Wi-Fi, and work schedule refreshed.",
                 org_count,
             )
             return 0
@@ -77,6 +79,7 @@ async def bootstrap() -> int:
         await db.flush()
         await seed_organization_leave_types(db, org.id)
         await seed_organization_office_wifi(db, org.id)
+        office_schedule = await seed_organization_work_schedule(db, org.id)
 
         admin = User(
             organization_id=org.id,
@@ -97,6 +100,7 @@ async def bootstrap() -> int:
                 last_name="Administrator",
                 hire_date=datetime.now(UTC).date(),
                 employment_status=EmploymentStatus.ACTIVE,
+                work_schedule_id=office_schedule.id,
             )
         )
         await db.commit()

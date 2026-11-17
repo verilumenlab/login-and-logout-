@@ -25,6 +25,7 @@ from app.models.attendance import (
     BreakSource,
 )
 from app.models.employee import EmployeeProfile, EmploymentStatus
+from app.core.office_policy import OFFICE_END
 from app.services.attendance_engine import (
     ensure_utc,
     is_clock_in,
@@ -35,8 +36,8 @@ from app.services.attendance_engine import (
 
 logger = logging.getLogger(__name__)
 
-EOD_HOUR = 18
-EOD_MINUTE = 30
+EOD_HOUR = OFFICE_END.hour
+EOD_MINUTE = OFFICE_END.minute
 IDLE_BREAK_SOURCES = {
     BreakSource.AUTO_IDLE.value,
     BreakSource.AUTO_LOCK.value,

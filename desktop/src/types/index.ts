@@ -56,6 +56,7 @@ export interface PresenceEventIn {
   ssid?: string | null;
   bssid?: string | null;
   device_id?: string | null;
+  detail?: string | null;
 }
 
 export interface PresenceEventResult {

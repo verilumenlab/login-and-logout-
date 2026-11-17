@@ -11,9 +11,18 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.office_policy import (
+    DEFAULT_SCHEDULE_DESCRIPTION,
+    DEFAULT_SCHEDULE_NAME,
+    LATE_LOGIN_GRACE_MINUTES,
+    OFFICE_END,
+    OFFICE_START,
+)
 from app.models.auth import Permission, Role, RolePermission
+from app.models.employee import EmployeeProfile
 from app.models.leave import LeaveBalance, LeaveCategory, LeaveType
 from app.models.office import Office, OfficeNetwork
+from app.models.schedule import WorkSchedule
 
 # 1. System Permissions Definitions
 PERMISSIONS_DATA: list[dict[str, str]] = [
@@ -570,3 +579,53 @@ async def seed_organization_office_wifi(db: AsyncSession, organization_id: uuid.
             row.name = net["name"]
     await db.flush()
     return office
+
+
+async def seed_organization_work_schedule(db: AsyncSession, organization_id: uuid.UUID) -> WorkSchedule:
+    """
+    Ensure the org has the standard 09:30–18:30 office schedule (9h, grace to 10:30)
+    and assign it to employees who have no schedule yet.
+    """
+    result = await db.execute(
+        select(WorkSchedule).where(
+            WorkSchedule.organization_id == organization_id,
+            WorkSchedule.name == DEFAULT_SCHEDULE_NAME,
+        )
+    )
+    schedule = result.scalars().first()
+
+    if schedule is None:
+        schedule = WorkSchedule(
+            organization_id=organization_id,
+            name=DEFAULT_SCHEDULE_NAME,
+            description=DEFAULT_SCHEDULE_DESCRIPTION,
+            shift_start_time=OFFICE_START,
+            shift_end_time=OFFICE_END,
+            flexible_minutes=LATE_LOGIN_GRACE_MINUTES,
+            working_days=[1, 2, 3, 4, 5],
+            is_active=True,
+        )
+        db.add(schedule)
+        await db.flush()
+    else:
+        schedule.description = DEFAULT_SCHEDULE_DESCRIPTION
+        schedule.shift_start_time = OFFICE_START
+        schedule.shift_end_time = OFFICE_END
+        schedule.flexible_minutes = LATE_LOGIN_GRACE_MINUTES
+        schedule.working_days = [1, 2, 3, 4, 5]
+        schedule.is_active = True
+        await db.flush()
+
+    # Point every employee at the standard office day unless they already have a schedule.
+    emps = (
+        await db.execute(
+            select(EmployeeProfile).where(
+                EmployeeProfile.organization_id == organization_id,
+                EmployeeProfile.work_schedule_id.is_(None),
+            )
+        )
+    ).scalars().all()
+    for emp in emps:
+        emp.work_schedule_id = schedule.id
+    await db.flush()
+    return schedule
