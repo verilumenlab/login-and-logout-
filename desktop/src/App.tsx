@@ -48,7 +48,7 @@ export default function App() {
   }, []);
 
   const { status, breakStatus, dataVersion, refresh, recordAppLogout, recordWorkLogin, recordWorkLogout } =
-    usePresenceTracker(device, session !== null, handleSessionExpired, session);
+    usePresenceTracker(device, session !== null, handleSessionExpired, session, setNotice);
 
   const handleLogin = (newSession: UserSession) => {
     bindQueueToUser(newSession.user_id);
@@ -89,6 +89,14 @@ export default function App() {
         onChangePassword={() => setShowChangePassword(true)}
       />
       <UpdateBanner />
+      {notice && (
+        <div className="app-notice" role="status">
+          <span>{notice}</span>
+          <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss">
+            ×
+          </button>
+        </div>
+      )}
       <main className="app-main">
         {screen === 'dashboard' && (
           <DashboardScreen

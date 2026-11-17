@@ -133,6 +133,20 @@ function registerIpc() {
   ipcMain.handle('wp:drainPowerEvents', async () => powerPresence.drainQueue());
   ipcMain.handle('wp:peekPowerEvents', async () => powerPresence.peekQueue());
   ipcMain.handle('wp:getSystemIdleSeconds', async () => powerPresence.getSystemIdleSeconds());
+  ipcMain.handle('wp:showNotification', async (_e, payload) => {
+    const title = String(payload?.title || 'WorkPulse');
+    const body = String(payload?.body || '');
+    try {
+      const { Notification } = require('electron');
+      if (!Notification.isSupported()) return { ok: false, reason: 'unsupported' };
+      const note = new Notification({ title, body, silent: false });
+      note.show();
+      return { ok: true };
+    } catch (err) {
+      console.warn('[notify]', err);
+      return { ok: false, reason: String(err) };
+    }
+  });
 }
 
 app.whenReady().then(async () => {

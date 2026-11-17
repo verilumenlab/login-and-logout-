@@ -40,6 +40,7 @@ type WorkpulseBridge = {
   drainPowerEvents: () => Promise<PresenceEventIn[]>;
   peekPowerEvents: () => Promise<PresenceEventIn[]>;
   getSystemIdleSeconds?: () => Promise<number>;
+  showNotification?: (payload: { title: string; body: string }) => Promise<{ ok: boolean; reason?: string }>;
   onPowerEventQueued: (callback: (event: PresenceEventIn) => void) => () => void;
   onBreakAwayQueued?: (callback: (event: BreakAwayPayload) => void) => () => void;
   checkForUpdates?: () => Promise<unknown>;
@@ -198,6 +199,25 @@ export async function getSystemIdleSeconds(): Promise<number> {
   } catch (e) {
     console.warn('[IPC] getSystemIdleSeconds failed:', e);
     return 0;
+  }
+}
+
+export async function showDesktopNotification(title: string, body: string): Promise<void> {
+  const wp = bridge();
+  if (wp?.showNotification) {
+    try {
+      await wp.showNotification({ title, body });
+      return;
+    } catch (e) {
+      console.warn('[IPC] showNotification failed:', e);
+    }
+  }
+  if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+    try {
+      new Notification(title, { body });
+    } catch {
+      // ignore
+    }
   }
 }
 

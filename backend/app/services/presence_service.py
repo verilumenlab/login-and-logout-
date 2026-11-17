@@ -590,6 +590,12 @@ async def get_team_presence(
     Returns (rows, counts, pending leave requests in scope).
     """
     now = datetime.now(UTC)
+    # After 6:30 PM local, auto-logout idle open sessions before building the board.
+    from app.services.end_of_day import eod_cutoff_utc, run_end_of_day_idle_logout
+
+    if now >= eod_cutoff_utc(work_date) and work_date == local_work_date(now):
+        await run_end_of_day_idle_logout(db, now=now, organization_id=organization_id)
+
     stmt = (
         select(EmployeeProfile)
         .join(User, User.id == EmployeeProfile.user_id)

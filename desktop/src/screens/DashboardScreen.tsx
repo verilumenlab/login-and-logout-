@@ -91,10 +91,23 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
 
   const today = summary?.today;
   const isWorking = Boolean(today?.is_logged_in);
-  const todayMinutes =
-    isWorking && today?.first_login
-      ? (Date.now() - new Date(today.first_login).getTime()) / 60000
-      : today?.worked_minutes ?? 0;
+  const todayMinutes = (() => {
+    if (!today?.first_login) return today?.worked_minutes ?? 0;
+    const startMs = new Date(today.first_login).getTime();
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+    const start = Math.max(startMs, dayStart.getTime());
+    if (isWorking) {
+      return Math.max(0, (Math.min(Date.now(), dayEnd.getTime()) - start) / 60000);
+    }
+    if (today.last_logout) {
+      const end = Math.min(new Date(today.last_logout).getTime(), dayEnd.getTime());
+      return Math.max(0, (end - start) / 60000);
+    }
+    return today.worked_minutes ?? 0;
+  })();
 
   const liveBreakMinutes = breakStatus?.isOnBreak ? breakStatus.breakElapsedMinutes || 0 : 0;
   const todayBreakMinutes = (today?.total_break_minutes || 0) + liveBreakMinutes;

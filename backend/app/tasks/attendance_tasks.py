@@ -2,14 +2,48 @@
 Celery Background Tasks for Attendance Processing
 """
 
+from __future__ import annotations
+
+import logging
+from typing import Any
+
 from app.core.celery_app import celery_app
+from app.core.database import AsyncSessionLocal
+from app.tasks.reporting_tasks import run_async
+
+logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="tasks.attendance.auto_clockout")
 def auto_clockout_inactive_sessions() -> dict:
-    """Closes any stale attendance sessions exceeding 14 hours."""
-    # In production, queries DB and flags anomalous forgotten clock-outs
-    return {"status": "success", "closed_records": 0}
+    """Legacy alias — prefer tasks.attendance.eod_idle_logout."""
+    return eod_idle_logout()
+
+
+@celery_app.task(name="tasks.attendance.eod_idle_logout")
+def eod_idle_logout() -> dict[str, Any]:
+    """
+    Every ~10 minutes: after 6:30 PM IST, auto-logout employees whose laptop
+    is idle (open AUTO_IDLE / LOCK / SLEEP break). Active users stay logged in.
+    """
+    from app.services.end_of_day import run_end_of_day_idle_logout
+
+    async def _execute():
+        async with AsyncSessionLocal() as db:
+            return await run_end_of_day_idle_logout(db)
+
+    try:
+        result = run_async(_execute())
+        logger.info(
+            "EOD idle logout: status=%s closed=%s still_active=%s",
+            result.get("status"),
+            result.get("closed_count", 0),
+            result.get("still_active_count", 0),
+        )
+        return result
+    except Exception:
+        logger.exception("EOD idle logout failed")
+        raise
 
 
 @celery_app.task(name="tasks.attendance.daily_summary")

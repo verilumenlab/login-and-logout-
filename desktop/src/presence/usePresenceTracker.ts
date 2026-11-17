@@ -6,6 +6,7 @@ import {
   onBreakAwayQueued,
   onPowerEventQueued,
   setPresenceSession,
+  showDesktopNotification,
 } from '../api/ipc';
 import { DeviceBlockedError, NetworkError, SessionExpiredError, pingBackend } from '../api/backend';
 import {
@@ -20,6 +21,7 @@ import {
   pendingBreakCount,
 } from '../attendance/breakTracker';
 import { DeviceInfo, PresenceEventIn, TrackerStatus, UserSession } from '../types';
+import { endOfDayLabel, evaluateEndOfDayLogout } from './endOfDayLogout';
 import {
   collectWifiEvents,
   enqueuePresenceEvent,
@@ -49,7 +51,8 @@ export function usePresenceTracker(
   device: DeviceInfo | null,
   active: boolean,
   onSessionExpired: (reason?: 'expired' | 'blocked') => void,
-  session: UserSession | null = null
+  session: UserSession | null = null,
+  onNotice?: (message: string) => void
 ) {
   const [status, setStatus] = useState<TrackerStatus>({
     isOnline: true,
@@ -68,6 +71,9 @@ export function usePresenceTracker(
   const [version, setVersion] = useState(0);
   const running = useRef(false);
   const appLoginQueued = useRef(false);
+  const loggedInRef = useRef<boolean | null>(null);
+  const noticeRef = useRef(onNotice);
+  noticeRef.current = onNotice;
 
   const refreshBreakStatus = useCallback(() => {
     const open = getOpenBreak();
@@ -115,13 +121,39 @@ export function usePresenceTracker(
         }
       }
 
-      setStatus((prev) => ({
+      // 6:30 PM check: idle → auto work-logout; still using → notify once.
+      const workOpen = isLoggedIn ?? loggedInRef.current;
+      if (workOpen === true) {
+        const eod = await evaluateEndOfDayLogout({ isWorkLoggedIn: true });
+        if (eod.action === 'auto_logout') {
+          endAutoBreak(device.device_id);
+          const wifiNow = await getConnectedWifiInfo();
+          queueAppEvent('APP_LOGOUT', device.device_id, wifiNow.is_wifi ? wifiNow.ssid : undefined);
+          try {
+            await flushBreakQueue();
+            isLoggedIn = await flushQueue();
+          } catch {
+            isLoggedIn = false;
+          }
+          const msg = `Auto logged out at ${endOfDayLabel()} — laptop was idle (not in use).`;
+          noticeRef.current?.(msg);
+          void showDesktopNotification('WorkPulse — Auto logout', msg);
+        } else if (eod.action === 'still_active' && eod.notified) {
+          const msg = `Still using your laptop after ${endOfDayLabel()}. You stay logged in — use Logout when you finish, or we will auto-logout once the laptop is idle.`;
+          noticeRef.current?.(msg);
+          void showDesktopNotification('WorkPulse — Still working?', msg);
+        }
+      }
+
+      const nextLoggedIn = isLoggedIn ?? loggedInRef.current;
+      loggedInRef.current = nextLoggedIn;
+      setStatus({
         isOnline,
         pendingEvents: pendingEventCount(),
         lastSyncAt: lastSyncTime(),
         wifi,
-        isLoggedIn: isLoggedIn ?? prev.isLoggedIn,
-      }));
+        isLoggedIn: nextLoggedIn,
+      });
       refreshBreakStatus();
       // Always bump so Dashboard / Leave / Login history auto-refresh.
       setVersion((v) => v + 1);

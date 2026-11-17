@@ -28,6 +28,19 @@ const STATUS_META: Record<TeamPresenceStatus, { label: string; badge: string }> 
 type Filter = 'ALL' | TeamPresenceStatus;
 type ExportPeriod = 'weekly' | 'monthly';
 
+/** Prefer server minutes for closed sessions; live-clamp only while still logged in. */
+function displayMinutes(row: TeamPresenceRow, workDate: string): number {
+  if (row.status === 'LOGGED_OUT' && (row.worked_minutes || 0) >= 0 && row.last_logout && row.first_login) {
+    const start = new Date(row.first_login).getTime();
+    const end = new Date(row.last_logout).getTime();
+    // Same-day short session: trust clock span when server rollup is overnight-inflated.
+    if (end >= start && (end - start) / 60000 <= 16 * 60) {
+      return (end - start) / 60000;
+    }
+  }
+  return liveMinutes(row, workDate);
+}
+
 /** Hours for the selected work date only — never count past local midnight into the next day. */
 function liveMinutes(row: TeamPresenceRow, workDate: string): number {
   if (!row.first_login) return row.worked_minutes || 0;
@@ -289,7 +302,7 @@ export default function PresencePage() {
                   <td className="px-4 py-3 tabular-nums">
                     {r.status === 'LOGGED_IN' ? <span className="text-emerald-600">Active</span> : formatTime(r.last_logout)}
                   </td>
-                  <td className="px-4 py-3 text-right tabular-nums">{r.first_login ? formatDuration(liveMinutes(r, date)) : '—'}</td>
+                  <td className="px-4 py-3 text-right tabular-nums">{r.first_login ? formatDuration(displayMinutes(r, date)) : '—'}</td>
                   <td className="px-4 py-3">
                     {r.first_wifi_connected_at ? (
                       <div className="flex items-center gap-1.5">

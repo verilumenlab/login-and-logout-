@@ -44,6 +44,11 @@ celery_app.conf.beat_schedule = {
         "task": "tasks.reporting.check_missed_executions",
         "schedule": crontab(minute="*/30"),  # Every 30 mins recovery check
     },
+    # 6:30 PM IST idle logout — task no-ops until local 18:30, then closes idle sessions.
+    "eod-idle-logout": {
+        "task": "tasks.attendance.eod_idle_logout",
+        "schedule": crontab(minute="*/10"),
+    },
 }
 
 # Autodiscover tasks
