@@ -257,6 +257,9 @@ export async function loginUser(email: string, password: string, device: DeviceI
   await saveSecureToken('refresh_token', data.refresh_token);
   localStorage.setItem('__device_id', data.device_id || '');
   localStorage.setItem('__employee_id', data.employee_id || '');
+  if (data.device_session_id) {
+    localStorage.setItem('__device_session_id', String(data.device_session_id));
+  }
   rememberDeviceIdentifier(device.device_id);
 
   let profile: EmployeeProfileInfo | null = null;
@@ -277,6 +280,7 @@ export async function loginUser(email: string, password: string, device: DeviceI
     employee_code: profile?.employee_code,
     job_title: profile?.job_title || undefined,
     department_name: profile?.department_name || undefined,
+    device_session_id: data.device_session_id ? String(data.device_session_id) : undefined,
   };
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
   return session;
@@ -299,6 +303,7 @@ export async function clearLocalSession(): Promise<void> {
   await deleteSecureToken('access_token');
   await deleteSecureToken('refresh_token');
   localStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem('__device_session_id');
 }
 
 export function getStoredUserSession(): UserSession | null {
@@ -353,6 +358,29 @@ export function syncOfflineAttendance(events: OfflineAttendanceItem[]): Promise<
   return request<AttendanceOfflineSyncResponse>('/attendance/sync-offline', {
     method: 'POST',
     body: JSON.stringify({ events }),
+  });
+}
+
+export type ActivityLogItem = {
+  device_event_id: string;
+  application_name: string;
+  window_title?: string | null;
+  process_id?: number | null;
+  start_time: string;
+  end_time: string;
+  duration_seconds: number;
+  idle_seconds?: number;
+  keystrokes_count?: number;
+  mouse_clicks_count?: number;
+};
+
+export function syncActivityLogs(
+  deviceSessionId: string,
+  logs: ActivityLogItem[]
+): Promise<{ synced_count: number; message: string }> {
+  return request('/activity/sync', {
+    method: 'POST',
+    body: JSON.stringify({ device_session_id: deviceSessionId, logs }),
   });
 }
 

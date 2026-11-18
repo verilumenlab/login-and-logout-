@@ -49,6 +49,11 @@ type WorkpulseBridge = {
   drainPowerEvents: () => Promise<PresenceEventIn[]>;
   peekPowerEvents: () => Promise<PresenceEventIn[]>;
   getSystemIdleSeconds?: () => Promise<number>;
+  getActiveWindow?: () => Promise<{
+    application_name: string;
+    window_title: string | null;
+    process_id: number;
+  }>;
   showNotification?: (payload: { title: string; body: string }) => Promise<{ ok: boolean; reason?: string }>;
   onPowerEventQueued: (callback: (event: PresenceEventIn) => void) => () => void;
   onBreakAwayQueued?: (callback: (event: BreakAwayPayload) => void) => () => void;
@@ -209,6 +214,28 @@ export async function getSystemIdleSeconds(): Promise<number> {
   } catch (e) {
     console.warn('[IPC] getSystemIdleSeconds failed:', e);
     return 0;
+  }
+}
+
+export async function getActiveWindow(): Promise<{
+  application_name: string;
+  window_title: string | null;
+  process_id: number;
+}> {
+  const wp = bridge();
+  if (!wp?.getActiveWindow) {
+    return { application_name: 'Unknown', window_title: null, process_id: 0 };
+  }
+  try {
+    const win = await wp.getActiveWindow();
+    return {
+      application_name: String(win?.application_name || 'Unknown'),
+      window_title: win?.window_title ? String(win.window_title) : null,
+      process_id: Number(win?.process_id) || 0,
+    };
+  } catch (e) {
+    console.warn('[IPC] getActiveWindow failed:', e);
+    return { application_name: 'Unknown', window_title: null, process_id: 0 };
   }
 }
 

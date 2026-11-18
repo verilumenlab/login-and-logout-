@@ -244,6 +244,43 @@ async function getPowerBootEvents(sinceIso) {
   return events;
 }
 
+/**
+ * Foreground window: process name, title, pid.
+ * Used for admin "what is each person using" — no screenshots/keylogging.
+ */
+async function getActiveWindow() {
+  const script = `
+    Add-Type @"
+      using System;
+      using System.Runtime.InteropServices;
+      using System.Text;
+      public class WinApi {
+        [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+        [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+      }
+"@
+    $hwnd = [WinApi]::GetForegroundWindow()
+    $procId = 0
+    [WinApi]::GetWindowThreadProcessId($hwnd, [ref]$procId) | Out-Null
+    $sb = New-Object System.Text.StringBuilder 256
+    [WinApi]::GetWindowText($hwnd, $sb, 256) | Out-Null
+    $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+    $name = if ($proc) { $proc.ProcessName } else { 'Unknown' }
+    Write-Output ("{0}|{1}|{2}" -f $name, ($sb.ToString() -replace '[\\r\\n\\|]', ' '), $procId)
+  `;
+  const out = (await runPs(script)).trim();
+  const parts = out.split('|');
+  if (parts.length >= 3) {
+    return {
+      application_name: parts[0].trim() || 'Unknown',
+      window_title: parts[1].trim() || null,
+      process_id: Number.parseInt(parts[2], 10) || 0,
+    };
+  }
+  return { application_name: 'Unknown', window_title: null, process_id: 0 };
+}
+
 module.exports = {
   saveSecureToken,
   getSecureToken,
@@ -252,4 +289,5 @@ module.exports = {
   getConnectedWifi,
   getWifiEvents,
   getPowerBootEvents,
+  getActiveWindow,
 };

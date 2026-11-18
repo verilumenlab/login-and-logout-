@@ -15,6 +15,7 @@ export interface UserSession {
   employee_code?: string;
   job_title?: string;
   department_name?: string;
+  device_session_id?: string;
 }
 
 export interface DeviceInfo {

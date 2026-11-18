@@ -200,6 +200,7 @@ function registerIpc() {
   ipcMain.handle('wp:peekPowerEvents', async () => powerPresence.peekQueue());
   ipcMain.handle('wp:drainBreakAwayQueue', async () => powerPresence.drainBreakQueue());
   ipcMain.handle('wp:getSystemIdleSeconds', async () => powerPresence.getSystemIdleSeconds());
+  ipcMain.handle('wp:getActiveWindow', async () => native.getActiveWindow());
   ipcMain.handle('wp:showNotification', async (_e, payload) => {
     const title = String(payload?.title || 'WorkPulse');
     const body = String(payload?.body || '');

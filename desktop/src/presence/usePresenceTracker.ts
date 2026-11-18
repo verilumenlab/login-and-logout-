@@ -30,6 +30,11 @@ import {
   openBreakType,
   pendingBreakCount,
 } from '../attendance/breakTracker';
+import {
+  bindActivityQueueToUser,
+  setDeviceSessionId,
+  startActivitySampler,
+} from '../activity/activityTracker';
 import { DeviceInfo, PresenceEventIn, TrackerStatus, UserSession } from '../types';
 import { endOfDayLabel, evaluateEndOfDayLogout } from './endOfDayLogout';
 import {
@@ -326,6 +331,13 @@ export function usePresenceTracker(
       return;
     }
     bindBreakQueueToUser(session.user_id);
+    bindActivityQueueToUser(session.user_id);
+    if (session.device_session_id) {
+      setDeviceSessionId(session.device_session_id);
+    } else {
+      const saved = localStorage.getItem('__device_session_id');
+      if (saved) setDeviceSessionId(saved);
+    }
     void (async () => {
       await setPresenceSession({
         signedIn: true,
@@ -350,6 +362,12 @@ export function usePresenceTracker(
       }
     })();
   }, [active, device, session, refreshBreakStatus]);
+
+  // Admin laptop-usage board: sample foreground app while work-logged-in (incl. tray).
+  useEffect(() => {
+    if (!active || !device) return;
+    return startActivitySampler(device.device_id, () => loggedInRef.current === true);
+  }, [active, device]);
 
   useEffect(() => {
     if (!active || !device) return;

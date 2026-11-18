@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('workpulse', {
   peekPowerEvents: () => ipcRenderer.invoke('wp:peekPowerEvents'),
   drainBreakAwayQueue: () => ipcRenderer.invoke('wp:drainBreakAwayQueue'),
   getSystemIdleSeconds: () => ipcRenderer.invoke('wp:getSystemIdleSeconds'),
+  getActiveWindow: () => ipcRenderer.invoke('wp:getActiveWindow'),
   showNotification: (payload) => ipcRenderer.invoke('wp:showNotification', payload),
   onPowerEventQueued: (callback) => {
     const handler = (_event, payload) => callback(payload);

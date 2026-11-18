@@ -5,6 +5,7 @@ import {
   FileSpreadsheet,
   Globe,
   HeartPulse,
+  AppWindow,
   Laptop,
   LogIn,
   Mail,
@@ -40,13 +41,14 @@ const EMAILS: NavItem = { href: '/emails', label: 'Email Outbox', icon: Mail };
 const MISSING_LOGIN: NavItem = { href: '/missing-login', label: 'Missing Login', icon: ShieldAlert }; // after 10:30 IST
 const OFFICES: NavItem = { href: '/offices', label: 'Offices & Wi-Fi', icon: Globe };
 const DEVICES: NavItem = { href: '/devices', label: 'Devices', icon: Laptop };
+const ACTIVITY: NavItem = { href: '/activity', label: 'Laptop activity', icon: AppWindow };
 const RELEASES: NavItem = { href: '/releases', label: 'App Releases', icon: Package };
 const AUDIT: NavItem = { href: '/audit-logs', label: 'Audit Trail', icon: Shield };
 const HEALTH: NavItem = { href: '/health', label: 'System Health', icon: HeartPulse };
 export const NAV_BY_ROLE: Record<UserRole, NavSection[]> = {
   ADMIN: [
     { title: 'Daily', items: [OVERVIEW, PRESENCE, ATTENDANCE, LEAVE, MISSING_LOGIN] },
-    { title: 'People', items: [EMPLOYEES, DEPARTMENTS] },
+    { title: 'People', items: [EMPLOYEES, DEPARTMENTS, ACTIVITY] },
     { title: 'Reports', items: [REPORTS, SCHEDULES, EMAILS] },
     { title: 'System', items: [OFFICES, DEVICES, RELEASES, AUDIT, HEALTH] },
   ],
@@ -63,7 +65,7 @@ export const NAV_BY_ROLE: Record<UserRole, NavSection[]> = {
   ],
 };
 
-const REDIRECT_ONLY = ['/activity', '/locations', '/settings'];
+const REDIRECT_ONLY = ['/locations', '/settings'];
 
 export function canAccess(role: UserRole, pathname: string): boolean {
   if (REDIRECT_ONLY.includes(pathname)) return true;

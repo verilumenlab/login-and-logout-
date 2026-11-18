@@ -37,3 +37,26 @@ class ActivityLogResponse(ActivityLogItem):
     id: uuid.UUID
     device_session_id: uuid.UUID
     created_at: datetime
+
+
+class EmployeeActivityNow(BaseModel):
+    """Latest foreground app for one employee (admin laptop-usage board)."""
+
+    employee_id: uuid.UUID
+    employee_code: str | None = None
+    employee_name: str
+    email: str | None = None
+    department_name: str | None = None
+    device_name: str | None = None
+    application_name: str | None = None
+    window_title: str | None = None
+    started_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    idle_seconds: int = 0
+    is_idle: bool = False
+    is_online: bool = False
+
+
+class EmployeeActivityBoardResponse(BaseModel):
+    generated_at: datetime
+    employees: list[EmployeeActivityNow]

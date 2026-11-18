@@ -250,6 +250,28 @@ export interface Device {
   employee_email?: string | null;
 }
 
+/** Admin laptop-usage board row (foreground app). */
+export interface EmployeeActivityRow {
+  employee_id: string;
+  employee_code?: string | null;
+  employee_name: string;
+  email?: string | null;
+  department_name?: string | null;
+  device_name?: string | null;
+  application_name?: string | null;
+  window_title?: string | null;
+  started_at?: string | null;
+  last_seen_at?: string | null;
+  idle_seconds: number;
+  is_idle: boolean;
+  is_online: boolean;
+}
+
+export interface EmployeeActivityBoard {
+  generated_at: string;
+  employees: EmployeeActivityRow[];
+}
+
 export interface ReleaseFile {
   id: string;
   kind: string;
@@ -1027,6 +1049,11 @@ export class ApiClient {
 
   async deleteOffice(officeId: string): Promise<void> {
     await this.request(`/offices/${officeId}`, { method: 'DELETE' });
+  }
+
+  // --- Laptop activity (admin) ---
+  async getActivityBoard(): Promise<EmployeeActivityBoard> {
+    return this.request<EmployeeActivityBoard>('/activity/board');
   }
 
   // --- Devices ---
