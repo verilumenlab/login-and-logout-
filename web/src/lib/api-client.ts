@@ -824,6 +824,7 @@ export class ApiClient {
   }
 
   async adminForceLogout(payload: {
+    only_employee_ids?: string[];
     keep_employee_codes?: string[];
     keep_name_substrings?: string[];
     note?: string;

@@ -151,6 +151,7 @@ async def admin_force_logout(
     result = await presence_service.admin_force_logout_open_sessions(
         db,
         organization_id=current_user.organization_id,
+        only_employee_ids=payload.only_employee_ids,
         keep_employee_codes=payload.keep_employee_codes,
         keep_name_substrings=payload.keep_name_substrings,
         note=payload.note

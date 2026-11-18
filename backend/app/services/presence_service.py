@@ -1859,28 +1859,30 @@ async def admin_force_logout_open_sessions(
     db: AsyncSession,
     *,
     organization_id: uuid.UUID,
+    only_employee_ids: list[uuid.UUID] | None = None,
     keep_employee_codes: list[str] | None = None,
     keep_name_substrings: list[str] | None = None,
     occurred_at: datetime | None = None,
     note: str = "Admin force logout — employee left; desktop still running in background",
 ) -> dict[str, object]:
     """
-    Clock out everyone still open today except people matching keep codes/names.
-    Used when tray background leaves sessions Active after staff have gone home.
+    Clock out open sessions.
+    - only_employee_ids: logout just those employees (per-row admin Logout).
+    - otherwise: logout everyone still open except keep codes/names (bulk).
     """
     now = ensure_utc(occurred_at) or datetime.now(UTC)
     work_date = local_work_date(now)
     keep_codes = {c.strip().upper() for c in (keep_employee_codes or []) if c and c.strip()}
     keep_names = [n.strip().lower() for n in (keep_name_substrings or []) if n and n.strip()]
+    only_ids = {eid for eid in (only_employee_ids or []) if eid}
 
-    employees = (
-        await db.execute(
-            select(EmployeeProfile).where(
-                EmployeeProfile.organization_id == organization_id,
-                EmployeeProfile.employment_status != EmploymentStatus.TERMINATED,
-            )
-        )
-    ).scalars().all()
+    emp_q = select(EmployeeProfile).where(
+        EmployeeProfile.organization_id == organization_id,
+        EmployeeProfile.employment_status != EmploymentStatus.TERMINATED,
+    )
+    if only_ids:
+        emp_q = emp_q.where(EmployeeProfile.id.in_(only_ids))
+    employees = (await db.execute(emp_q)).scalars().all()
 
     logged_out: list[dict[str, object]] = []
     kept: list[dict[str, object]] = []
@@ -1890,7 +1892,8 @@ async def admin_force_logout_open_sessions(
         code = (emp.employee_code or "").strip().upper()
         full_name = f"{emp.first_name or ''} {emp.last_name or ''}".strip()
         name_l = full_name.lower()
-        keep = code in keep_codes or any(k in name_l for k in keep_names)
+        # When targeting specific IDs, never apply keep filters.
+        keep = (not only_ids) and (code in keep_codes or any(k in name_l for k in keep_names))
 
         open_session = await _open_session(db, emp.id)
         if open_session is None:

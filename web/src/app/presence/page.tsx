@@ -117,6 +117,7 @@ export default function PresencePage() {
   const [exporting, setExporting] = useState<ExportPeriod | null>(null);
   const [sendingMissingMail, setSendingMissingMail] = useState(false);
   const [forcingLogout, setForcingLogout] = useState(false);
+  const [loggingOutId, setLoggingOutId] = useState<string | null>(null);
   const exportRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
@@ -178,6 +179,32 @@ export default function PresencePage() {
 
   const notLoggedInCount = data?.counts.not_logged_in ?? 0;
   const loggedInCount = data?.counts.logged_in ?? 0;
+
+  const forceLogoutOne = async (row: TeamPresenceRow) => {
+    if (!canForceLogout || date !== today || row.status !== 'LOGGED_IN') return;
+    if (!confirm(`Log out ${row.full_name} (${row.employee_code}) now?\n\nUse this when they left but the desktop app is still Active.`)) {
+      return;
+    }
+    setLoggingOutId(row.employee_id);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await apiClient.adminForceLogout({
+        only_employee_ids: [row.employee_id],
+        note: `Admin logout — ${row.full_name} left; desktop still running in background`,
+      });
+      setNotice(
+        result.logged_out_count > 0
+          ? `Logged out ${row.full_name}.`
+          : `${row.full_name} was not Active (already logged out).`
+      );
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Could not log out ${row.full_name}`);
+    } finally {
+      setLoggingOutId(null);
+    }
+  };
 
   const forceLogoutOthers = async () => {
     if (!canForceLogout || date !== today) return;
@@ -535,12 +562,28 @@ export default function PresencePage() {
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <Link
-                      href={`/attendance?employee=${r.employee_id}`}
-                      className="text-[11px] font-semibold text-blue-700 dark:text-blue-300 hover:underline"
-                    >
-                      Full history
-                    </Link>
+                    <div className="flex flex-col items-start gap-1.5">
+                      {canForceLogout && date === today && r.status === 'LOGGED_IN' && (
+                        <button
+                          type="button"
+                          onClick={() => void forceLogoutOne(r)}
+                          disabled={loggingOutId === r.employee_id || forcingLogout}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-semibold disabled:opacity-50"
+                          title={`Log out ${r.full_name}`}
+                        >
+                          {loggingOutId === r.employee_id ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : null}
+                          {loggingOutId === r.employee_id ? 'Logging out…' : 'Logout'}
+                        </button>
+                      )}
+                      <Link
+                        href={`/attendance?employee=${r.employee_id}`}
+                        className="text-[11px] font-semibold text-blue-700 dark:text-blue-300 hover:underline"
+                      >
+                        Full history
+                      </Link>
+                    </div>
                   </td>
                 </tr>
               ))}

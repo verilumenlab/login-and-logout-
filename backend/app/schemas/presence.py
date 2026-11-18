@@ -161,8 +161,13 @@ class AttendanceRepairResponse(BaseModel):
 
 
 class AdminForceLogoutRequest(BaseModel):
-    """Keep these people logged in; clock out everyone else who is still Active."""
+    """
+    Clock out open sessions.
+    - If only_employee_ids is set: logout only those people (per-row Logout button).
+    - Else: logout everyone still Active except keep codes/names (bulk).
+    """
 
+    only_employee_ids: list[uuid.UUID] = Field(default_factory=list)
     keep_employee_codes: list[str] = Field(default_factory=list)
     keep_name_substrings: list[str] = Field(default_factory=list)
     note: str | None = Field(
