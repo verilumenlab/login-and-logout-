@@ -6,7 +6,10 @@ const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   env: {
-    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1',
+    // On Vercel, default to same-origin /api (proxied to Render) so the browser never hits CORS.
+    NEXT_PUBLIC_API_URL:
+      process.env.NEXT_PUBLIC_API_URL ||
+      (process.env.VERCEL ? '/api/v1' : 'http://localhost:8000/api/v1'),
   },
 };
 

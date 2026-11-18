@@ -5,6 +5,12 @@
   "installCommand": "npm ci",
   "outputDirectory": "out",
   "cleanUrls": true,
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://workpulse-api-pm0x.onrender.com/api/:path*"
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",
