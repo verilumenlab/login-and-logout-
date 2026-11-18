@@ -1555,10 +1555,16 @@ class EmailService:
         idempotency_key = (
             f"missing_login_{employee_code}_{work_date}_{recipient_email.strip().lower()}_{audience}"
         )
+        # Two mails: employee gets "you need to login"; HR/manager/admin get "this person was not login".
+        template_key = (
+            "attendance_missing_alert_employee"
+            if audience == "employee"
+            else "attendance_missing_alert"
+        )
         outbox = await cls.enqueue_email(
             db=db,
             organization_id=organization_id,
-            template_key="attendance_missing_alert",
+            template_key=template_key,
             recipient_email=recipient_email,
             recipient_name=recipient_name,
             context={

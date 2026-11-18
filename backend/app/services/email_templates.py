@@ -619,13 +619,14 @@ Late: {late_minutes}m (Grace: {grace_minutes}m)
 Portal: {dashboard_url}/attendance
         """.strip(),
     },
+    # To HR / Manager / Admin: this person was not logged in (name + email)
     "attendance_missing_alert": {
-        "subject": "Not logged in after {alert_time}: {employee_name} ({work_date})",
+        "subject": "Not logged in: {employee_name} ({work_date})",
         "badge_class": "badge-danger",
-        "badge_text": "No Login After Grace",
+        "badge_text": "Employee Not Logged In",
         "html": """
           <p>Hello <strong>{recipient_name}</strong>,</p>
-          <p>Employee <strong>{employee_name}</strong> has <strong>not logged in</strong> after the grace cutoff (<strong>{alert_time}</strong>) on <strong>{work_date}</strong>.</p>
+          <p>This person has <strong>not logged in</strong> after <strong>{alert_time}</strong> on <strong>{work_date}</strong>.</p>
           
           <div class="info-card">
             <div class="info-row"><span class="info-label">Name:</span> <span class="info-val">{employee_name}</span></div>
@@ -633,26 +634,57 @@ Portal: {dashboard_url}/attendance
             <div class="info-row"><span class="info-label">Employee code:</span> <span class="info-val">{employee_code}</span></div>
             <div class="info-row"><span class="info-label">Department:</span> <span class="info-val">{department_name}</span></div>
             <div class="info-row"><span class="info-label">Shift:</span> <span class="info-val">{scheduled_shift}</span></div>
-            <div class="info-row"><span class="info-label">Grace period:</span> <span class="info-val">{grace_minutes} minutes</span></div>
             <div class="info-row"><span class="info-label">Status:</span> <span class="info-val">NOT LOGGED IN</span></div>
           </div>
           
           <div class="btn-container">
-            <a href="{dashboard_url}/attendance" class="btn">Inspect Attendance</a>
+            <a href="{dashboard_url}/missing-login" class="btn">Open Missing Login Approvals</a>
           </div>
         """,
         "text": """
-Not logged in after {alert_time} ({work_date})
+This person was not logged in after {alert_time} ({work_date})
 
 Name: {employee_name}
 Email: {employee_email}
 Employee code: {employee_code}
 Department: {department_name}
-Scheduled shift: {scheduled_shift}
-Grace: {grace_minutes} minutes
 Status: NOT LOGGED IN
 
-Inspect: {dashboard_url}/attendance
+Portal: {dashboard_url}/missing-login
+        """.strip(),
+    },
+    # To the employee: you need to login
+    "attendance_missing_alert_employee": {
+        "subject": "Please log in — attendance missing ({work_date})",
+        "badge_class": "badge-warning",
+        "badge_text": "Action Required: Log In",
+        "html": """
+          <p>Hello <strong>{employee_name}</strong>,</p>
+          <p>Our records show you have <strong>not logged in</strong> after <strong>{alert_time}</strong> on <strong>{work_date}</strong>.</p>
+          <p><strong>You need to log in</strong> now using the WorkPulse desktop app on your laptop.</p>
+          
+          <div class="info-card">
+            <div class="info-row"><span class="info-label">Your name:</span> <span class="info-val">{employee_name}</span></div>
+            <div class="info-row"><span class="info-label">Your email:</span> <span class="info-val">{employee_email}</span></div>
+            <div class="info-row"><span class="info-label">Employee code:</span> <span class="info-val">{employee_code}</span></div>
+            <div class="info-row"><span class="info-label">Department:</span> <span class="info-val">{department_name}</span></div>
+            <div class="info-row"><span class="info-label">Expected by:</span> <span class="info-val">{alert_time}</span></div>
+            <div class="info-row"><span class="info-label">Status:</span> <span class="info-val">NOT LOGGED IN</span></div>
+          </div>
+          
+          <p>Open the WorkPulse desktop app and sign in to record today’s attendance.</p>
+        """,
+        "text": """
+Please log in — attendance missing ({work_date})
+
+Hello {employee_name},
+You have not logged in after {alert_time} on {work_date}.
+You need to log in now using the WorkPulse desktop app.
+
+Your name: {employee_name}
+Your email: {employee_email}
+Employee code: {employee_code}
+Status: NOT LOGGED IN
         """.strip(),
     },
     "attendance_adjustment_requested": {

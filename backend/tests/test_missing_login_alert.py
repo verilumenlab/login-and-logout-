@@ -132,25 +132,28 @@ def _weekday_after_cutoff() -> datetime:
 
 
 @pytest.mark.asyncio
-async def test_missing_login_template_includes_name_and_email():
-    subject, html, text = render_email_template(
-        "attendance_missing_alert",
-        {
-            "recipient_name": "Ada Admin",
-            "employee_name": "Eve Employee",
-            "employee_email": "eve@mlc.corp",
-            "employee_code": "E-1001",
-            "work_date": "2026-11-18",
-            "scheduled_shift": "09:30 – 18:30",
-            "department_name": "Ops",
-            "grace_minutes": 60,
-            "alert_time": "10:30",
-        },
-    )
+async def test_missing_login_two_templates():
+    ctx = {
+        "recipient_name": "Ada Admin",
+        "employee_name": "Eve Employee",
+        "employee_email": "eve@mlc.corp",
+        "employee_code": "E-1001",
+        "work_date": "2026-11-18",
+        "scheduled_shift": "09:30 – 18:30",
+        "department_name": "Ops",
+        "grace_minutes": 60,
+        "alert_time": "10:30",
+    }
+    subject, html, text = render_email_template("attendance_missing_alert", ctx)
     assert "Eve Employee" in subject
     assert "eve@mlc.corp" in html
-    assert "Name: Eve Employee" in text
-    assert MISSING_LOGIN_ALERT.strftime("%H:%M") in subject or "10:30" in subject
+    assert "This person was not logged in" in text or "not logged in" in html.lower()
+
+    e_subj, e_html, e_text = render_email_template("attendance_missing_alert_employee", ctx)
+    assert "log in" in e_subj.lower() or "Please log in" in e_subj
+    assert "You need to log in" in e_html or "You need to log in" in e_text
+    assert "eve@mlc.corp" in e_html
+    assert MISSING_LOGIN_ALERT.strftime("%H:%M") in e_html or "10:30" in e_html
 
 
 @pytest.mark.asyncio
