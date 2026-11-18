@@ -130,13 +130,15 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   const runAction = async (kind: 'login' | 'logout') => {
     if (busyAction) return;
     setBusyAction(kind);
+    const safety = window.setTimeout(() => setBusyAction(null), 20_000);
     try {
       if (kind === 'login') await onWorkLogin?.();
       else await onWorkLogout?.();
-      await load();
+      await load(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : `Could not ${kind}`);
     } finally {
+      window.clearTimeout(safety);
       setBusyAction(null);
     }
   };

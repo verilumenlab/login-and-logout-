@@ -670,16 +670,29 @@ def _fallback_eod_without_office_wifi(
     office_ssids: set[str],
     shift_end: datetime | None,
     day_end: datetime,
+    now: datetime | None = None,
 ) -> tuple[datetime | None, str | None]:
     """
     If the day was left open until midnight and there was no office Wi-Fi after 6:00 PM,
     stop hours at 6:30 PM (office end). Covers missing disconnect events (Manasa/Poojitha).
+
+    Never apply during the morning/afternoon of the same day — that incorrectly
+    clocked people out at 6:30 PM while they were still trying to log in.
     """
     from app.core.office_policy import OFFICE_END
 
     if not office_ssids:
         return None, None
-    if shift_end is not None and shift_end < day_end - timedelta(minutes=2):
+
+    now = ensure_utc(now) or datetime.now(UTC)
+    eod = datetime.combine(work_date, OFFICE_END, tzinfo=org_zone()).astimezone(UTC)
+    # Only after office end (or for a past work date).
+    if now < eod:
+        return None, None
+
+    # Open session past EOD, or logout stamped at/near midnight.
+    open_or_midnight = shift_end is None or shift_end >= day_end - timedelta(minutes=1)
+    if not open_or_midnight:
         return None, None
 
     evening_start = _evening_sleep_cutoff_utc(work_date)
@@ -697,7 +710,6 @@ def _fallback_eod_without_office_wifi(
         ):
             return None, None
 
-    eod = datetime.combine(work_date, OFFICE_END, tzinfo=org_zone()).astimezone(UTC)
     return eod, "eod_no_office_wifi"
 
 
@@ -980,6 +992,97 @@ async def _autoclose_prior_open_sessions(
             seen.add(day.employee_id)
 
 
+def _is_premature_eod_fallback_out(event: AttendanceEvent, *, eod: datetime, now: datetime) -> bool:
+    """True when a rule wrote 6:30 PM logout before office end (bug)."""
+    et = str(getattr(event.event_type, "value", event.event_type)).upper()
+    if "CLOCK_OUT" not in et:
+        return False
+    ts = ensure_utc(event.timestamp)
+    if ts is None or now >= eod:
+        return False
+    if abs((ts - eod).total_seconds()) > 120:
+        return False
+    notes = (event.notes or "").lower()
+    cid = (event.client_event_id or "").lower()
+    return (
+        "not on office" in notes
+        or "eod_no_office_wifi" in notes
+        or "rule-logout" in cid
+    )
+
+
+async def _reopen_premature_eod_fallback_days(
+    db: AsyncSession,
+    att_days: list[AttendanceDay],
+    *,
+    work_date: date,
+    now: datetime,
+) -> list[dict]:
+    """
+    Undo false morning/afternoon 6:30 PM clock-outs so Login works again today.
+    """
+    from app.core.office_policy import OFFICE_END
+
+    eod = datetime.combine(work_date, OFFICE_END, tzinfo=org_zone()).astimezone(UTC)
+    if now >= eod:
+        return []
+
+    reopened: list[dict] = []
+    for day in att_days:
+        ordered = sorted(day.events or [], key=lambda e: ensure_utc(e.timestamp) or now)
+        if not ordered:
+            continue
+        last = ordered[-1]
+        meta = dict(day.metadata_json or {})
+        reason = str(meta.get("corrected_logout_reason") or meta.get("sleep_auto_logout_reason") or "")
+        looks_fallback = reason.startswith("eod_no_office_wifi") or _is_premature_eod_fallback_out(
+            last, eod=eod, now=now
+        )
+        if not looks_fallback:
+            continue
+        if not _is_premature_eod_fallback_out(last, eod=eod, now=now) and "eod_no_office_wifi" not in reason:
+            continue
+
+        # Remove premature rule outs near 6:30 PM.
+        removed = 0
+        for ev in list(ordered):
+            if _is_premature_eod_fallback_out(ev, eod=eod, now=now) or (
+                "CLOCK_OUT" in str(getattr(ev.event_type, "value", ev.event_type)).upper()
+                and abs(((ensure_utc(ev.timestamp) or eod) - eod).total_seconds()) < 120
+                and (
+                    "not on office" in (ev.notes or "").lower()
+                    or "rule-logout" in (ev.client_event_id or "").lower()
+                )
+            ):
+                await db.delete(ev)
+                removed += 1
+        if removed == 0:
+            continue
+
+        meta.pop("corrected_logout_at", None)
+        meta.pop("corrected_logout_reason", None)
+        if str(meta.get("sleep_auto_logout_reason") or "").startswith("eod_no_office_wifi"):
+            meta.pop("sleep_auto_logout_at", None)
+            meta.pop("sleep_auto_logout_reason", None)
+        day.metadata_json = meta
+        day.shift_end = None
+        await db.flush()
+        await recalculate_attendance_day(db, day.id)
+        reopened.append(
+            {
+                "employee_id": str(day.employee_id),
+                "full_name": None,
+                "work_date": work_date.isoformat(),
+                "reason": "reopen_premature_eod_fallback",
+                "login_at": (ensure_utc(day.shift_start) or now).isoformat(),
+                "logout_at": None,
+                "worked_minutes": int(day.total_work_minutes or 0),
+                "note": "Reopened — false 6:30 PM logout removed (before office end)",
+            }
+        )
+    return reopened
+
+
 async def repair_evening_sleep_logouts(
     db: AsyncSession,
     employee_ids: list[uuid.UUID],
@@ -1020,20 +1123,41 @@ async def repair_evening_sleep_logouts(
     for sig in signals:
         by_emp[sig.employee_id].append(sig)
 
-    att_days = (
-        await db.execute(
-            select(AttendanceDay)
-            .options(selectinload(AttendanceDay.events))
-            .where(
-                AttendanceDay.employee_id.in_(employee_ids),
-                AttendanceDay.work_date == work_date,
-                AttendanceDay.shift_start.is_not(None),
+    att_days = list(
+        (
+            await db.execute(
+                select(AttendanceDay)
+                .options(selectinload(AttendanceDay.events))
+                .where(
+                    AttendanceDay.employee_id.in_(employee_ids),
+                    AttendanceDay.work_date == work_date,
+                    AttendanceDay.shift_start.is_not(None),
+                )
             )
-        )
-    ).scalars().all()
+        ).scalars().all()
+    )
 
     repaired: list[dict] = []
     now = datetime.now(UTC)
+    # Undo false morning 6:30 PM outs before applying evening rules.
+    repaired.extend(
+        await _reopen_premature_eod_fallback_days(db, att_days, work_date=work_date, now=now)
+    )
+    # Reload after reopen so evening repair sees open sessions.
+    if repaired:
+        att_days = list(
+            (
+                await db.execute(
+                    select(AttendanceDay)
+                    .options(selectinload(AttendanceDay.events))
+                    .where(
+                        AttendanceDay.employee_id.in_(employee_ids),
+                        AttendanceDay.work_date == work_date,
+                        AttendanceDay.shift_start.is_not(None),
+                    )
+                )
+            ).scalars().all()
+        )
     for day in att_days:
         emp_sigs = by_emp.get(day.employee_id, [])
         leave_at, reason = _infer_effective_logout(
@@ -1051,6 +1175,7 @@ async def repair_evening_sleep_logouts(
                 office_ssids=office_ssids,
                 shift_end=shift_end,
                 day_end=day_end,
+                now=now,
             )
         if leave_at is None or reason is None:
             continue
@@ -1060,7 +1185,10 @@ async def repair_evening_sleep_logouts(
             leave_at,
             not_before=ensure_utc(day.shift_start),
         )
-        # Persist whenever stored logout is missing, still open, at day-end, or later than rule.
+        # Do not force-close an active session before office end with the EOD fallback.
+        if reason == "eod_no_office_wifi" and still_open and now < close_at:
+            continue
+        # Persist whenever stored logout is missing, still open (after EOD rules), at day-end, or later than rule.
         needs = still_open or shift_end is None or shift_end >= day_end - timedelta(minutes=1) or (
             shift_end is not None and shift_end > close_at + timedelta(minutes=2)
         )
@@ -1315,6 +1443,7 @@ async def get_presence_days(
                     office_ssids=office_ssids,
                     shift_end=logout_for_hours,
                     day_end=local_day_bounds(work_date)[1],
+                    now=now,
                 )
             if leave_at is not None and (
                 logout_for_hours is None or logout_for_hours > leave_at + timedelta(minutes=2)
@@ -1504,6 +1633,7 @@ async def get_team_presence(
                     office_ssids=office_ssids,
                     shift_end=logout_for_hours,
                     day_end=day_end,
+                    now=now,
                 )
             if leave_at is not None and (
                 logout_for_hours is None or logout_for_hours > leave_at + timedelta(minutes=2)

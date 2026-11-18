@@ -346,10 +346,18 @@ export function usePresenceTracker(
     const wifi = await getConnectedWifiInfo();
     queueAppEvent('APP_LOGIN', device.device_id, wifi.is_wifi ? wifi.ssid : undefined);
     syncWorkStart(new Date());
-    await flushQueue();
     loggedInRef.current = true;
+    setStatus((prev) => ({ ...prev, isLoggedIn: true }));
     setVersion((v) => v + 1);
-    await tick();
+    try {
+      await flushQueue();
+    } catch (err) {
+      // Keep local logged-in; events stay queued for the next sync cycle.
+      console.warn('[presence] work login sync failed:', err);
+    }
+    // Do not await tick — if a poller cycle is already running, awaiting it
+    // never resolves the click handler and the UI stays on "Logging in…".
+    void tick();
   }, [device, tick]);
 
   const recordWorkLogout = useCallback(
