@@ -29,6 +29,8 @@ from app.models.department import Department
 from app.models.employee import EmployeeProfile, ManagerAssignment
 from app.models.organization import Organization
 from app.schemas.presence import (
+    AdminForceLogoutRequest,
+    AdminForceLogoutResponse,
     AttendanceRepairResponse,
     PresenceHistoryResponse,
     PresenceMonthSummary,
@@ -125,6 +127,36 @@ async def get_my_presence_history(
     start, end = _history_range(start_date, end_date)
     days = await presence_service.get_presence_days(db, current_emp, start, end)
     return PresenceHistoryResponse(start_date=start, end_date=end, days=days)
+
+
+@router.post("/admin-force-logout", response_model=AdminForceLogoutResponse)
+async def admin_force_logout(
+    payload: AdminForceLogoutRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> AdminForceLogoutResponse:
+    """
+    Admin/HR: clock out everyone still Active today except keep-list people.
+    Use when staff left but the desktop tray kept them logged in.
+    """
+    role_name = (current_user.role.name if current_user.role else "").strip().lower()
+    if not (
+        current_user.is_superuser
+        or "admin" in role_name
+        or "hr" in role_name
+        or role_name == "human resources"
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin or HR only")
+
+    result = await presence_service.admin_force_logout_open_sessions(
+        db,
+        organization_id=current_user.organization_id,
+        keep_employee_codes=payload.keep_employee_codes,
+        keep_name_substrings=payload.keep_name_substrings,
+        note=payload.note
+        or "Admin force logout — employee left; desktop still running in background",
+    )
+    return AdminForceLogoutResponse(**result)
 
 
 @router.post("/repair-history", response_model=AttendanceRepairResponse)

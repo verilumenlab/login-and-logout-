@@ -823,6 +823,25 @@ export class ApiClient {
     return this.request<TeamPresenceResponse>(`/presence/team${date ? `?date=${date}` : ''}`);
   }
 
+  async adminForceLogout(payload: {
+    keep_employee_codes?: string[];
+    keep_name_substrings?: string[];
+    note?: string;
+  }): Promise<{
+    status: string;
+    work_date: string;
+    logged_out_count: number;
+    kept_count: number;
+    skipped_count: number;
+    logged_out: Array<{ employee_code?: string; full_name?: string; logout_at?: string }>;
+    kept: Array<{ employee_code?: string; full_name?: string }>;
+  }> {
+    return this.request('/presence/admin-force-logout', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
   /**
    * Backend audit: correct logout + hours from Attendance history rules
    * (office Wi-Fi disconnect / sleep / shutdown) for the last N days.

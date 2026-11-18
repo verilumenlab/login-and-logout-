@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.attendance import (
+    AttendanceBreak,
     AttendanceDay,
     AttendanceEvent,
     AttendanceEventType,
@@ -58,6 +59,7 @@ from app.core.office_policy import SLEEP_LOGOUT_AFTER
 from app.services.attendance_engine import (
     determine_work_date_for_clock_in,
     ensure_utc,
+    finalize_break,
     is_clock_in,
     local_day_bounds,
     local_work_date,
@@ -1851,3 +1853,112 @@ async def get_month_summary(
         average_daily_minutes=int(total_minutes / len(present_dates)) if present_dates else 0,
         today=today_row,
     )
+
+
+async def admin_force_logout_open_sessions(
+    db: AsyncSession,
+    *,
+    organization_id: uuid.UUID,
+    keep_employee_codes: list[str] | None = None,
+    keep_name_substrings: list[str] | None = None,
+    occurred_at: datetime | None = None,
+    note: str = "Admin force logout — employee left; desktop still running in background",
+) -> dict[str, object]:
+    """
+    Clock out everyone still open today except people matching keep codes/names.
+    Used when tray background leaves sessions Active after staff have gone home.
+    """
+    now = ensure_utc(occurred_at) or datetime.now(UTC)
+    work_date = local_work_date(now)
+    keep_codes = {c.strip().upper() for c in (keep_employee_codes or []) if c and c.strip()}
+    keep_names = [n.strip().lower() for n in (keep_name_substrings or []) if n and n.strip()]
+
+    employees = (
+        await db.execute(
+            select(EmployeeProfile).where(
+                EmployeeProfile.organization_id == organization_id,
+                EmployeeProfile.employment_status != EmploymentStatus.TERMINATED,
+            )
+        )
+    ).scalars().all()
+
+    logged_out: list[dict[str, object]] = []
+    kept: list[dict[str, object]] = []
+    skipped: list[dict[str, object]] = []
+
+    for emp in employees:
+        code = (emp.employee_code or "").strip().upper()
+        full_name = f"{emp.first_name or ''} {emp.last_name or ''}".strip()
+        name_l = full_name.lower()
+        keep = code in keep_codes or any(k in name_l for k in keep_names)
+
+        open_session = await _open_session(db, emp.id)
+        if open_session is None:
+            skipped.append({"employee_code": code, "full_name": full_name, "reason": "not_logged_in"})
+            continue
+        if keep:
+            kept.append({"employee_code": code, "full_name": full_name})
+            continue
+
+        day, last_in = open_session
+        close_at = _logout_timestamp_for_day(day.work_date, now, not_before=last_in)
+        client_id = f"admin:force-logout:{emp.id}:{int(close_at.timestamp())}"
+        presence_id = f"admin:force-logout-pe:{emp.id}:{int(close_at.timestamp())}"
+
+        # Close any open break on this day.
+        open_breaks = (
+            await db.execute(
+                select(AttendanceBreak).where(
+                    AttendanceBreak.attendance_day_id == day.id,
+                    AttendanceBreak.end_time.is_(None),
+                )
+            )
+        ).scalars().all()
+        for br in open_breaks:
+            finalize_break(br, close_at)
+
+        await _add_attendance_event(
+            db,
+            day,
+            AttendanceEventType.CLOCK_OUT,
+            close_at,
+            client_id,
+            note,
+        )
+        _apply_workday_metadata(
+            day,
+            f"WORKDAY|AUTO_LOGOUT|ADMIN_FORCE|0 — {note}",
+        )
+        db.add(
+            PresenceEvent(
+                organization_id=organization_id,
+                employee_id=emp.id,
+                event_type=PresenceEventType.APP_LOGOUT.value,
+                occurred_at=close_at,
+                client_event_id=presence_id,
+                device_id=None,
+                ssid=None,
+                bssid=None,
+                attendance_action=PresenceAttendanceAction.CLOCK_OUT.value,
+            )
+        )
+        await recalculate_attendance_day(db, day.id, commit=False)
+        logged_out.append(
+            {
+                "employee_code": code,
+                "full_name": full_name,
+                "work_date": day.work_date.isoformat(),
+                "logout_at": close_at.isoformat(),
+            }
+        )
+
+    await db.commit()
+    return {
+        "status": "ok",
+        "work_date": work_date.isoformat(),
+        "logged_out_count": len(logged_out),
+        "kept_count": len(kept),
+        "logged_out": logged_out,
+        "kept": kept,
+        "skipped_count": len(skipped),
+    }

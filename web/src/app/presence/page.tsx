@@ -104,6 +104,7 @@ function liveMinutes(row: TeamPresenceRow, workDate: string): number {
 export default function PresencePage() {
   const { role } = useRole();
   const canSendMissingMail = role === 'ADMIN' || role === 'HR' || role === 'MANAGER';
+  const canForceLogout = role === 'ADMIN' || role === 'HR';
   const today = localDateInput(new Date());
   const [date, setDate] = useState(today);
   const [data, setData] = useState<TeamPresenceResponse | null>(null);
@@ -115,6 +116,7 @@ export default function PresencePage() {
   const [exportOpen, setExportOpen] = useState(false);
   const [exporting, setExporting] = useState<ExportPeriod | null>(null);
   const [sendingMissingMail, setSendingMissingMail] = useState(false);
+  const [forcingLogout, setForcingLogout] = useState(false);
   const exportRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
@@ -175,6 +177,50 @@ export default function PresencePage() {
   };
 
   const notLoggedInCount = data?.counts.not_logged_in ?? 0;
+  const loggedInCount = data?.counts.logged_in ?? 0;
+
+  const forceLogoutOthers = async () => {
+    if (!canForceLogout || date !== today) return;
+    const active = (data?.rows ?? []).filter((r) => r.status === 'LOGGED_IN');
+    const keep = active.filter(
+      (r) =>
+        /ganesh/i.test(r.full_name) ||
+        /subhan/i.test(r.full_name) ||
+        r.employee_code === 'ENG001' ||
+        r.employee_code === 'ENG002'
+    );
+    const targets = active.filter((r) => !keep.some((k) => k.employee_id === r.employee_id));
+    if (
+      !confirm(
+        `Log out everyone still Active except Ganesh and Subhan?\n\nWill log out (${targets.length}):\n• ${
+          targets.map((r) => r.full_name).join('\n• ') || '(none)'
+        }\n\nKeep logged in:\n• ${keep.map((r) => r.full_name).join('\n• ') || '(none)'}`
+      )
+    ) {
+      return;
+    }
+    setForcingLogout(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await apiClient.adminForceLogout({
+        keep_employee_codes: ['ENG001', 'ENG002'],
+        keep_name_substrings: ['ganesh', 'subhan'],
+        note: 'Admin force logout — employee left; desktop still running in background',
+      });
+      const names = (result.logged_out || []).map((p) => p.full_name || p.employee_code).join(', ');
+      setNotice(
+        result.logged_out_count > 0
+          ? `Logged out ${result.logged_out_count} employee(s)${names ? `: ${names}` : ''}. Kept ${result.kept_count}.`
+          : 'No open sessions to log out (everyone already closed or kept).'
+      );
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not force logout');
+    } finally {
+      setForcingLogout(false);
+    }
+  };
 
   const sendNotLoggedInMail = async () => {
     if (!canSendMissingMail) return;
@@ -276,6 +322,22 @@ export default function PresencePage() {
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
+          {canForceLogout && date === today && (
+            <button
+              type="button"
+              onClick={() => void forceLogoutOthers()}
+              disabled={forcingLogout || loading || loggedInCount === 0}
+              title="Clock out staff who left while the desktop app stayed Active in the tray"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold disabled:opacity-50"
+            >
+              {forcingLogout ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+              {forcingLogout
+                ? 'Logging out…'
+                : loggedInCount > 0
+                  ? `Log out others (${loggedInCount})`
+                  : 'Log out others'}
+            </button>
+          )}
           {canSendMissingMail && date === today && (
             <button
               type="button"

@@ -158,3 +158,33 @@ class AttendanceRepairResponse(BaseModel):
     to_date: str
     repaired_count: int
     repaired: list[AttendanceRepairRow] = Field(default_factory=list)
+
+
+class AdminForceLogoutRequest(BaseModel):
+    """Keep these people logged in; clock out everyone else who is still Active."""
+
+    keep_employee_codes: list[str] = Field(default_factory=list)
+    keep_name_substrings: list[str] = Field(default_factory=list)
+    note: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Stored on the clock-out note / Login & Logout board",
+    )
+
+
+class AdminForceLogoutPerson(BaseModel):
+    employee_code: str | None = None
+    full_name: str | None = None
+    work_date: str | None = None
+    logout_at: str | None = None
+    reason: str | None = None
+
+
+class AdminForceLogoutResponse(BaseModel):
+    status: str
+    work_date: str
+    logged_out_count: int
+    kept_count: int
+    skipped_count: int = 0
+    logged_out: list[AdminForceLogoutPerson] = Field(default_factory=list)
+    kept: list[AdminForceLogoutPerson] = Field(default_factory=list)
