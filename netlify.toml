@@ -16,3 +16,14 @@
     X-Frame-Options = "DENY"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
+
+# Next static export writes /missing-login.html — keep pretty URLs working.
+[[redirects]]
+  from = "/missing-login"
+  to = "/missing-login.html"
+  status = 200
+
+[[redirects]]
+  from = "/missing-login/"
+  to = "/missing-login.html"
+  status = 200
