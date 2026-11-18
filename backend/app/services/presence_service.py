@@ -993,13 +993,16 @@ async def _autoclose_prior_open_sessions(
 
 
 def _is_premature_eod_fallback_out(event: AttendanceEvent, *, eod: datetime, now: datetime) -> bool:
-    """True when a rule wrote 6:30 PM logout before office end (bug)."""
+    """True when a rule wrote a logout that is still in the future (morning bug)."""
     et = str(getattr(event.event_type, "value", event.event_type)).upper()
     if "CLOCK_OUT" not in et:
         return False
     ts = ensure_utc(event.timestamp)
     if ts is None or now >= eod:
         return False
+    # Any logout stamped after "now" cannot be real yet today.
+    if ts > now + timedelta(minutes=1):
+        return True
     if abs((ts - eod).total_seconds()) > 120:
         return False
     notes = (event.notes or "").lower()
@@ -1008,6 +1011,7 @@ def _is_premature_eod_fallback_out(event: AttendanceEvent, *, eod: datetime, now
         "not on office" in notes
         or "eod_no_office_wifi" in notes
         or "rule-logout" in cid
+        or "auto-logout" in notes
     )
 
 
@@ -1035,33 +1039,28 @@ async def _reopen_premature_eod_fallback_days(
         last = ordered[-1]
         meta = dict(day.metadata_json or {})
         reason = str(meta.get("corrected_logout_reason") or meta.get("sleep_auto_logout_reason") or "")
-        looks_fallback = reason.startswith("eod_no_office_wifi") or _is_premature_eod_fallback_out(
-            last, eod=eod, now=now
+        shift_end = ensure_utc(day.shift_end)
+        future_end = shift_end is not None and shift_end > now + timedelta(minutes=1)
+        looks_fallback = (
+            "eod_no_office_wifi" in reason
+            or _is_premature_eod_fallback_out(last, eod=eod, now=now)
+            or future_end
         )
         if not looks_fallback:
             continue
-        if not _is_premature_eod_fallback_out(last, eod=eod, now=now) and "eod_no_office_wifi" not in reason:
-            continue
 
-        # Remove premature rule outs near 6:30 PM.
+        # Remove premature outs (future-dated or rule 6:30 PM stamps).
         removed = 0
         for ev in list(ordered):
-            if _is_premature_eod_fallback_out(ev, eod=eod, now=now) or (
-                "CLOCK_OUT" in str(getattr(ev.event_type, "value", ev.event_type)).upper()
-                and abs(((ensure_utc(ev.timestamp) or eod) - eod).total_seconds()) < 120
-                and (
-                    "not on office" in (ev.notes or "").lower()
-                    or "rule-logout" in (ev.client_event_id or "").lower()
-                )
-            ):
+            if _is_premature_eod_fallback_out(ev, eod=eod, now=now):
                 await db.delete(ev)
                 removed += 1
-        if removed == 0:
+        if removed == 0 and not future_end:
             continue
 
         meta.pop("corrected_logout_at", None)
         meta.pop("corrected_logout_reason", None)
-        if str(meta.get("sleep_auto_logout_reason") or "").startswith("eod_no_office_wifi"):
+        if "eod_no_office_wifi" in str(meta.get("sleep_auto_logout_reason") or ""):
             meta.pop("sleep_auto_logout_at", None)
             meta.pop("sleep_auto_logout_reason", None)
         day.metadata_json = meta
@@ -1450,8 +1449,25 @@ async def get_presence_days(
             ):
                 logout_for_hours = leave_at
 
+            from app.core.office_policy import OFFICE_END as _OFFICE_END_DAY
+
+            eod_day = datetime.combine(work_date, _OFFICE_END_DAY, tzinfo=org_zone()).astimezone(UTC)
+            if now < eod_day and leave_reason == "eod_no_office_wifi":
+                leave_at, leave_reason = None, None
+            if now < eod_day and logout_for_hours is not None and logout_for_hours > now:
+                logout_for_hours = None
+
             ordered = sorted(att.events or [], key=lambda e: ensure_utc(e.timestamp) or now)
-            still_open = bool(ordered) and is_clock_in(ordered[-1].event_type) and leave_at is None
+            last_is_in = bool(ordered) and is_clock_in(ordered[-1].event_type)
+            last_ts = ensure_utc(ordered[-1].timestamp) if ordered else None
+            future_out = (
+                bool(ordered)
+                and not last_is_in
+                and last_ts is not None
+                and last_ts > now
+                and now < eod_day
+            )
+            still_open = future_out or (last_is_in and leave_at is None)
             row.is_logged_in = still_open
             row.status = att.status.value if hasattr(att.status, "value") else str(att.status)
             if still_open:
@@ -1640,11 +1656,30 @@ async def get_team_presence(
             ):
                 logout_for_hours = leave_at
 
+            # Never show a completed logout that is still in the future (morning board bug).
+            from app.core.office_policy import OFFICE_END as _OFFICE_END
+
+            eod_today = datetime.combine(work_date, _OFFICE_END, tzinfo=org_zone()).astimezone(UTC)
+            if now < eod_today and leave_reason == "eod_no_office_wifi":
+                leave_at, leave_reason = None, None
+            if now < eod_today and logout_for_hours is not None and logout_for_hours > now:
+                logout_for_hours = None
+
             row.break_count = len(att.breaks or []) if getattr(att, "breaks", None) is not None else 0
             row.total_break_minutes = int(att.total_break_minutes or 0)
 
             ordered = sorted(att.events or [], key=lambda e: ensure_utc(e.timestamp) or now)
-            still_open = bool(ordered) and is_clock_in(ordered[-1].event_type) and leave_at is None
+            last_is_in = bool(ordered) and is_clock_in(ordered[-1].event_type)
+            last_ts = ensure_utc(ordered[-1].timestamp) if ordered else None
+            # CLOCK_OUT stamped at 6:30 PM while it is still morning → still working.
+            future_out = (
+                bool(ordered)
+                and not last_is_in
+                and last_ts is not None
+                and last_ts > now
+                and now < eod_today
+            )
+            still_open = future_out or (last_is_in and leave_at is None)
             if still_open:
                 row.status = "LOGGED_IN"
                 start, _, mins = _clamp_session_to_work_date(
