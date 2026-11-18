@@ -12,23 +12,47 @@ function dayEndMs(workDate: string): number {
 }
 
 /**
- * Last system sleep/shutdown after 6:00 PM with no later same-evening wake.
- * Hours must stop here (not at 11:59 PM).
+ * Infer logout from timeline:
+ * 1) after 6:00 PM sleep/shutdown (no wake)
+ * 2) office/Wi-Fi disconnect with no later Wi-Fi connect / app sign-in
  */
-export function finalEveningPowerOff(events: PresenceEvent[], workDate: string): PresenceEvent | null {
+export function inferLogoutEvent(events: PresenceEvent[], workDate: string): PresenceEvent | null {
   const cutoff = eveningCutoffMs(workDate);
   const ordered = [...events].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
   let last: PresenceEvent | null = null;
+
   for (const ev of ordered) {
     const t = new Date(ev.occurred_at).getTime();
-    if (!Number.isFinite(t) || t < cutoff) continue;
-    if (ev.event_type === 'SYSTEM_SUSPEND' || ev.event_type === 'SYSTEM_SHUTDOWN') {
-      last = ev;
-    } else if (ev.event_type === 'SYSTEM_RESUME' || ev.event_type === 'SYSTEM_STARTUP') {
+    if (!Number.isFinite(t)) continue;
+
+    // Only a counted office login clears a prior leave (home APP_LOGIN must not revive hours).
+    if (ev.event_type === 'WIFI_CONNECTED' && ev.attendance_action === 'CLOCK_IN') {
       last = null;
+      continue;
+    }
+    if (ev.event_type === 'APP_LOGIN' && ev.attendance_action === 'CLOCK_IN') {
+      last = null;
+      continue;
+    }
+    if (ev.event_type === 'WIFI_DISCONNECTED' || ev.event_type === 'APP_LOGOUT') {
+      last = ev;
+      continue;
+    }
+    if (ev.event_type === 'SYSTEM_SHUTDOWN') {
+      last = ev;
+      continue;
+    }
+    if (ev.event_type === 'SYSTEM_SUSPEND' && t >= cutoff) {
+      last = ev;
+      continue;
     }
   }
   return last;
+}
+
+/** @deprecated use inferLogoutEvent */
+export function finalEveningPowerOff(events: PresenceEvent[], workDate: string): PresenceEvent | null {
+  return inferLogoutEvent(events, workDate);
 }
 
 /** Corrected logout ISO + worked minutes for one attendance history day. */
@@ -37,20 +61,20 @@ export function correctedHistoryDay(day: PresenceDay): {
   worked_minutes: number;
   powerOffEvent: PresenceEvent | null;
 } {
-  const powerOffEvent = finalEveningPowerOff(day.events || [], day.work_date);
+  const powerOffEvent = inferLogoutEvent(day.events || [], day.work_date);
   if (!day.first_login) {
     return { last_logout: day.last_logout, worked_minutes: 0, powerOffEvent };
   }
 
   const start = new Date(day.first_login).getTime();
   const endCap = dayEndMs(day.work_date);
-  let endIso = powerOffEvent?.occurred_at || day.last_logout || null;
 
   if (day.is_logged_in && !powerOffEvent) {
     const mins = Math.max(0, (Math.min(Date.now(), endCap) - start) / 60000);
     return { last_logout: day.last_logout, worked_minutes: mins, powerOffEvent };
   }
 
+  const endIso = powerOffEvent?.occurred_at || day.last_logout || null;
   if (!endIso) {
     return { last_logout: day.last_logout, worked_minutes: day.worked_minutes || 0, powerOffEvent };
   }
@@ -66,6 +90,6 @@ export function correctedHistoryDay(day: PresenceDay): {
 
 export function isPowerOffCountedAsLogout(ev: PresenceEvent, day: PresenceDay): boolean {
   if (ev.attendance_action === 'CLOCK_OUT') return true;
-  const power = finalEveningPowerOff(day.events || [], day.work_date);
+  const power = inferLogoutEvent(day.events || [], day.work_date);
   return Boolean(power && power.occurred_at === ev.occurred_at && power.event_type === ev.event_type);
 }

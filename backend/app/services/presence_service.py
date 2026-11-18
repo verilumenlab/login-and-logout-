@@ -447,9 +447,14 @@ async def record_presence_event(
             open_session=open_session,
         )
     elif wifi_counts_for_attendance and event.event_type in LOGOUT_EVENT_TYPES:
+        is_office_wifi_out = event.event_type == PresenceEventType.WIFI_DISCONNECTED
         if open_session is not None:
             if occurred_at >= open_session[1]:
-                notes = _describe(event)
+                notes = (
+                    "Auto-logout — left office Wi-Fi"
+                    if is_office_wifi_out
+                    else _describe(event)
+                )
                 close_at = _logout_timestamp_for_day(
                     open_session[0].work_date,
                     occurred_at,
@@ -458,7 +463,13 @@ async def record_presence_event(
                 await _add_attendance_event(
                     db, open_session[0], AttendanceEventType.CLOCK_OUT, close_at, attendance_id, notes
                 )
-                _apply_workday_metadata(open_session[0], event.detail or notes)
+                if is_office_wifi_out:
+                    _apply_workday_metadata(
+                        open_session[0],
+                        "WORKDAY|AUTO_LOGOUT|OFFICE_WIFI|0 — Auto-logout — left office Wi-Fi",
+                    )
+                else:
+                    _apply_workday_metadata(open_session[0], event.detail or notes)
                 action = PresenceAttendanceAction.CLOCK_OUT
         else:
             # Already logged out today: a later app logout / Wi-Fi disconnect becomes the day's logout time.
@@ -472,7 +483,11 @@ async def record_presence_event(
             ).scalars().first()
             last_out = ensure_utc(day.shift_end) if day is not None else None
             if day is not None and last_out is not None and occurred_at > last_out:
-                notes = _describe(event)
+                notes = (
+                    "Auto-logout — left office Wi-Fi"
+                    if is_office_wifi_out
+                    else _describe(event)
+                )
                 close_at = _logout_timestamp_for_day(
                     day.work_date,
                     occurred_at,
@@ -482,7 +497,13 @@ async def record_presence_event(
                     await _add_attendance_event(
                         db, day, AttendanceEventType.CLOCK_OUT, close_at, attendance_id, notes
                     )
-                    _apply_workday_metadata(day, event.detail or notes)
+                    if is_office_wifi_out:
+                        _apply_workday_metadata(
+                            day,
+                            "WORKDAY|AUTO_LOGOUT|OFFICE_WIFI|0 — Auto-logout — left office Wi-Fi",
+                        )
+                    else:
+                        _apply_workday_metadata(day, event.detail or notes)
                     action = PresenceAttendanceAction.CLOCK_OUT
 
     db.add(
@@ -561,6 +582,123 @@ def _final_evening_power_off_at(signals: list[PresenceEvent]) -> tuple[datetime 
             power_off_at = None
             reason = None
     return power_off_at, reason
+
+
+def _infer_effective_logout(
+    signals: list[PresenceEvent],
+    *,
+    work_date: date,
+    office_ssids: set[str],
+) -> tuple[datetime | None, str | None]:
+    """
+    Infer when worked time should stop for the day:
+
+    1. After 6:00 PM — system sleep (no wake) or system shutdown → logout
+    2. Office Wi-Fi disconnect (no later office Wi-Fi / app login) → logout
+
+    Hours after that point must not count.
+    """
+    evening_start = _evening_sleep_cutoff_utc(work_date)
+    ordered = sorted(
+        signals,
+        key=lambda e: ensure_utc(e.occurred_at) or datetime.min.replace(tzinfo=UTC),
+    )
+    logout_at: datetime | None = None
+    reason: str | None = None
+
+    for sig in ordered:
+        et = str(getattr(sig.event_type, "value", sig.event_type))
+        ts = ensure_utc(sig.occurred_at)
+        if ts is None:
+            continue
+        ssid = sig.ssid
+        is_office = _ssid_is_office(ssid, office_ssids)
+
+        # Back on office network (or app login on office Wi-Fi) → work continues.
+        if et in (PresenceEventType.WIFI_CONNECTED.value, "WIFI_CONNECTED") and is_office:
+            logout_at = None
+            reason = None
+            continue
+        if et in (PresenceEventType.APP_LOGIN.value, "APP_LOGIN") and is_office:
+            logout_at = None
+            reason = None
+            continue
+
+        # Left office Wi-Fi → logout; hours after this must not count until office returns.
+        if et in (PresenceEventType.WIFI_DISCONNECTED.value, "WIFI_DISCONNECTED") and is_office:
+            logout_at = ts
+            reason = "office_wifi"
+            continue
+
+        if et in (PresenceEventType.APP_LOGOUT.value, "APP_LOGOUT"):
+            logout_at = ts
+            reason = "app_logout"
+            continue
+
+        if et in (PresenceEventType.SYSTEM_SHUTDOWN.value, "SYSTEM_SHUTDOWN"):
+            logout_at = ts
+            reason = "shutdown"
+            continue
+
+        # Sleep before 6:00 PM is break-only; after 6:00 PM it ends the day.
+        if et in (PresenceEventType.SYSTEM_SUSPEND.value, "SYSTEM_SUSPEND") and ts >= evening_start:
+            logout_at = ts
+            reason = "sleep"
+            continue
+
+    return logout_at, reason
+
+
+def _logout_note_for_reason(reason: str) -> str:
+    if reason == "shutdown":
+        return "Auto-logout — laptop shut down after 6:00 PM"
+    if reason == "sleep":
+        return "Auto-logout — laptop system sleep after 6:00 PM"
+    if reason == "office_wifi":
+        return "Auto-logout — left office Wi-Fi"
+    if reason == "app_logout":
+        return "Desktop app logout"
+    if reason == "eod_no_office_wifi":
+        return "Auto-logout — not on office Wi-Fi after 6:30 PM"
+    return "Auto-logout"
+
+
+def _fallback_eod_without_office_wifi(
+    signals: list[PresenceEvent],
+    *,
+    work_date: date,
+    office_ssids: set[str],
+    shift_end: datetime | None,
+    day_end: datetime,
+) -> tuple[datetime | None, str | None]:
+    """
+    If the day was left open until midnight and there was no office Wi-Fi after 6:00 PM,
+    stop hours at 6:30 PM (office end). Covers missing disconnect events (Manasa/Poojitha).
+    """
+    from app.core.office_policy import OFFICE_END
+
+    if not office_ssids:
+        return None, None
+    if shift_end is not None and shift_end < day_end - timedelta(minutes=2):
+        return None, None
+
+    evening_start = _evening_sleep_cutoff_utc(work_date)
+    for sig in signals:
+        et = str(getattr(sig.event_type, "value", sig.event_type))
+        ts = ensure_utc(sig.occurred_at)
+        if ts is None or ts < evening_start:
+            continue
+        if et in (PresenceEventType.WIFI_CONNECTED.value, "WIFI_CONNECTED") and _ssid_is_office(
+            sig.ssid, office_ssids
+        ):
+            return None, None
+        if et in (PresenceEventType.APP_LOGIN.value, "APP_LOGIN") and _ssid_is_office(
+            sig.ssid, office_ssids
+        ):
+            return None, None
+
+    eod = datetime.combine(work_date, OFFICE_END, tzinfo=org_zone()).astimezone(UTC)
+    return eod, "eod_no_office_wifi"
 
 
 async def _apply_system_shutdown_logout(
@@ -642,28 +780,28 @@ async def _best_previous_day_logout(
 ) -> tuple[datetime, str]:
     """
     Choose logout for a day left open overnight.
-    Prefer evening system sleep/shutdown so next-morning login is not required for correct hours.
+    Prefer evening sleep/shutdown or office Wi-Fi disconnect — not next-morning login.
     """
-    evening_start = _evening_sleep_cutoff_utc(stale_day.work_date)
-    _, day_end = local_day_bounds(stale_day.work_date)
+    day_start, day_end = local_day_bounds(stale_day.work_date)
+    emp = await db.get(EmployeeProfile, employee_id)
+    office_ssids = await _office_ssids(db, emp.organization_id) if emp is not None else set()
     signals = (
         await db.execute(
             select(PresenceEvent)
             .where(
                 PresenceEvent.employee_id == employee_id,
-                PresenceEvent.occurred_at >= evening_start,
+                PresenceEvent.occurred_at >= day_start,
                 PresenceEvent.occurred_at < min(before, day_end),
-                PresenceEvent.event_type.in_(list(_EVENING_POWER_OFF_TYPES | _EVENING_WAKE_TYPES)),
             )
             .order_by(PresenceEvent.occurred_at)
         )
     ).scalars().all()
-    power_off_at, reason = _final_evening_power_off_at(list(signals))
-    if power_off_at is not None:
-        close_at = _logout_timestamp_for_day(stale_day.work_date, power_off_at, not_before=last_in)
-        if reason == "shutdown":
-            return close_at, "Auto-logout — laptop shut down after 6:00 PM"
-        return close_at, "Auto-logout — laptop system sleep after 6:00 PM"
+    leave_at, reason = _infer_effective_logout(
+        list(signals), work_date=stale_day.work_date, office_ssids=office_ssids
+    )
+    if leave_at is not None and reason is not None:
+        close_at = _logout_timestamp_for_day(stale_day.work_date, leave_at, not_before=last_in)
+        return close_at, _logout_note_for_reason(reason)
 
     last_seen = await db.scalar(
         select(PresenceEvent.occurred_at)
@@ -848,23 +986,28 @@ async def repair_evening_sleep_logouts(
     work_date: date,
 ) -> list[dict]:
     """
-    For each employee on work_date: if laptop SYSTEM_SUSPEND or SYSTEM_SHUTDOWN happened
-    after 6:00 PM with no same-evening wake, clock out at that time and recalculate hours.
-    Does not require the employee to log in the next morning.
+    Fix a work day for all employees using logout rules:
+    - after 6:00 PM system sleep / shutdown → logout
+    - office Wi-Fi disconnect (no later office return) → logout
+    Then recalculate hours so time after that logout is not counted.
     """
     if not employee_ids:
         return []
-    _, day_end = local_day_bounds(work_date)
-    evening_start = _evening_sleep_cutoff_utc(work_date)
+    day_start, day_end = local_day_bounds(work_date)
+
+    # Need org office SSIDs — load from first employee's organization.
+    first_emp = await db.get(EmployeeProfile, employee_ids[0])
+    office_ssids: set[str] = set()
+    if first_emp is not None:
+        office_ssids = await _office_ssids(db, first_emp.organization_id)
 
     signals = (
         await db.execute(
             select(PresenceEvent)
             .where(
                 PresenceEvent.employee_id.in_(employee_ids),
-                PresenceEvent.occurred_at >= evening_start,
+                PresenceEvent.occurred_at >= day_start,
                 PresenceEvent.occurred_at < day_end,
-                PresenceEvent.event_type.in_(list(_EVENING_POWER_OFF_TYPES | _EVENING_WAKE_TYPES)),
             )
             .order_by(PresenceEvent.occurred_at)
         )
@@ -889,41 +1032,51 @@ async def repair_evening_sleep_logouts(
     repaired: list[dict] = []
     now = datetime.now(UTC)
     for day in att_days:
-        power_off_at, reason = _final_evening_power_off_at(by_emp.get(day.employee_id, []))
-        if power_off_at is None or reason is None:
-            continue
-
+        emp_sigs = by_emp.get(day.employee_id, [])
+        leave_at, reason = _infer_effective_logout(
+            emp_sigs,
+            work_date=work_date,
+            office_ssids=office_ssids,
+        )
         ordered = sorted(day.events or [], key=lambda e: ensure_utc(e.timestamp) or now)
         still_open = bool(ordered) and is_clock_in(ordered[-1].event_type)
         shift_end = ensure_utc(day.shift_end)
+        if leave_at is None:
+            leave_at, reason = _fallback_eod_without_office_wifi(
+                emp_sigs,
+                work_date=work_date,
+                office_ssids=office_ssids,
+                shift_end=shift_end,
+                day_end=day_end,
+            )
+        if leave_at is None or reason is None:
+            continue
+
         needs = still_open or shift_end is None or shift_end >= day_end or (
-            shift_end is not None and shift_end > power_off_at + timedelta(minutes=20)
+            shift_end is not None and shift_end > leave_at + timedelta(minutes=20)
         )
         if not needs:
             continue
 
         close_at = _logout_timestamp_for_day(
             work_date,
-            power_off_at,
+            leave_at,
             not_before=ensure_utc(day.shift_start),
         )
-        note = (
-            "Auto-logout — laptop shut down after 6:00 PM"
-            if reason == "shutdown"
-            else "Auto-logout — laptop system sleep after 6:00 PM"
-        )
+        note = _logout_note_for_reason(reason)
         existing = False
         for e in ordered:
             et = str(getattr(e.event_type, "value", e.event_type)).upper()
             ts = ensure_utc(e.timestamp)
             if "CLOCK_OUT" not in et or ts is None:
                 continue
-            if abs((ts - close_at).total_seconds()) < 90 and (
-                "system sleep" in (e.notes or "").lower() or "shut down" in (e.notes or "").lower()
-            ):
+            if abs((ts - close_at).total_seconds()) < 90:
                 existing = True
                 break
         if existing:
+            # Still recalculate if stored hours look overnight-inflated.
+            if (day.total_work_minutes or 0) > 12 * 60 or (shift_end is not None and shift_end >= day_end):
+                await recalculate_attendance_day(db, day.id)
             continue
 
         await _add_attendance_event(
@@ -931,17 +1084,20 @@ async def repair_evening_sleep_logouts(
             day,
             AttendanceEventType.CLOCK_OUT,
             close_at,
-            f"presence:power-logout:{day.id}:{int(close_at.timestamp())}"[:100],
+            f"presence:rule-logout:{day.id}:{int(close_at.timestamp())}"[:100],
             note,
         )
-        status_key = "EOD_SHUTDOWN" if reason == "shutdown" else "EOD_SLEEP"
-        _apply_workday_metadata(
-            day,
-            f"WORKDAY|AUTO_LOGOUT|{status_key}|0 — {note}",
-        )
+        status_key = {
+            "shutdown": "EOD_SHUTDOWN",
+            "sleep": "EOD_SLEEP",
+            "office_wifi": "OFFICE_WIFI",
+            "app_logout": "APP_LOGOUT",
+            "eod_no_office_wifi": "EOD_NO_OFFICE_WIFI",
+        }.get(reason, "AUTO_LOGOUT")
+        _apply_workday_metadata(day, f"WORKDAY|AUTO_LOGOUT|{status_key}|0 — {note}")
         meta = dict(day.metadata_json or {})
         meta["sleep_auto_logout_at"] = close_at.isoformat()
-        meta["sleep_auto_logout_reason"] = f"system_{reason}_after_18_repair"
+        meta["sleep_auto_logout_reason"] = f"{reason}_repair"
         day.metadata_json = meta
         await recalculate_attendance_day(db, day.id)
         repaired.append(
@@ -949,7 +1105,7 @@ async def repair_evening_sleep_logouts(
                 "employee_id": str(day.employee_id),
                 "work_date": work_date.isoformat(),
                 "reason": reason,
-                "power_off_at": power_off_at.isoformat(),
+                "left_at": leave_at.isoformat(),
                 "closed_at": close_at.isoformat(),
             }
         )
@@ -1056,22 +1212,18 @@ async def get_presence_days(
             row.events.sort(key=lambda e: ensure_utc(e.occurred_at) or now)
         if att is not None and att.shift_start is not None:
             att = await _autoclose_stale_open_day(db, att, now=now)
-            # Prefer evening sleep/shutdown from the timeline so hours stop there
-            # (e.g. ganesh 06:30 PM shutdown → not 11:59 PM).
-            evening_signals = [
-                e
-                for e in day_events
-                if (ensure_utc(e.occurred_at) or now) >= _evening_sleep_cutoff_utc(work_date)
-            ]
-            power_off_at, _power_reason = _final_evening_power_off_at(evening_signals)
+            office_ssids = await _office_ssids(db, employee.organization_id)
+            leave_at, _leave_reason = _infer_effective_logout(
+                day_events, work_date=work_date, office_ssids=office_ssids
+            )
             logout_for_hours = ensure_utc(att.shift_end)
-            if power_off_at is not None and (
-                logout_for_hours is None or logout_for_hours > power_off_at + timedelta(minutes=2)
+            if leave_at is not None and (
+                logout_for_hours is None or logout_for_hours > leave_at + timedelta(minutes=2)
             ):
-                logout_for_hours = power_off_at
+                logout_for_hours = leave_at
 
             ordered = sorted(att.events or [], key=lambda e: ensure_utc(e.timestamp) or now)
-            still_open = bool(ordered) and is_clock_in(ordered[-1].event_type) and power_off_at is None
+            still_open = bool(ordered) and is_clock_in(ordered[-1].event_type) and leave_at is None
             row.is_logged_in = still_open
             row.status = att.status.value if hasattr(att.status, "value") else str(att.status)
             if still_open:
@@ -1193,6 +1345,7 @@ async def get_team_presence(
         )
     ) or 0
 
+    office_ssids = await _office_ssids(db, organization_id)
     rows: list[TeamPresenceRow] = []
     counts = TeamPresenceCounts(total=len(employees))
     for emp in employees:
@@ -1232,20 +1385,25 @@ async def get_team_presence(
                 if refreshed is not None:
                     att = refreshed
             att_by_emp[emp.id] = att
-            evening_signals = [
-                e
-                for e in emp_signals
-                if (ensure_utc(e.occurred_at) or now) >= _evening_sleep_cutoff_utc(work_date)
-            ]
-            power_off_at, _power_reason = _final_evening_power_off_at(evening_signals)
+            leave_at, _leave_reason = _infer_effective_logout(
+                emp_signals, work_date=work_date, office_ssids=office_ssids
+            )
             logout_for_hours = ensure_utc(att.shift_end)
-            if power_off_at is not None and (
-                logout_for_hours is None or logout_for_hours > power_off_at + timedelta(minutes=2)
+            if leave_at is None:
+                leave_at, _leave_reason = _fallback_eod_without_office_wifi(
+                    emp_signals,
+                    work_date=work_date,
+                    office_ssids=office_ssids,
+                    shift_end=logout_for_hours,
+                    day_end=day_end,
+                )
+            if leave_at is not None and (
+                logout_for_hours is None or logout_for_hours > leave_at + timedelta(minutes=2)
             ):
-                logout_for_hours = power_off_at
+                logout_for_hours = leave_at
 
             ordered = sorted(att.events or [], key=lambda e: ensure_utc(e.timestamp) or now)
-            still_open = bool(ordered) and is_clock_in(ordered[-1].event_type) and power_off_at is None
+            still_open = bool(ordered) and is_clock_in(ordered[-1].event_type) and leave_at is None
             if still_open:
                 row.status = "LOGGED_IN"
                 start, _, mins = _clamp_session_to_work_date(
