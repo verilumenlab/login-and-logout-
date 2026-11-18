@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, Notification } = require('electron');
 const path = require('node:path');
 const native = require('./native.cjs');
 const powerPresence = require('./power-presence.cjs');
@@ -8,17 +8,25 @@ const isDev = !app.isPackaged;
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
+let hidToTrayNoticeShown = false;
+
+// One process only — reopening the shortcut brings back the background instance.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    showMainWindow();
+  });
+}
 
 function appIconPath() {
   const fs = require('node:fs');
   const candidates = [
-    // Packaged install: next to the .exe (NSIS shortcut uses {app}\\app.ico)
     path.join(path.dirname(process.execPath || ''), 'app.ico'),
-    // Packaged: resources/app.ico (extraResources)
     path.join(process.resourcesPath || '', 'app.ico'),
     path.join(process.resourcesPath || '', 'icon.ico'),
     path.join(process.resourcesPath || '', 'build', 'icon.ico'),
-    // Dev
     path.join(__dirname, '..', 'build', 'icon.ico'),
     path.join(__dirname, '..', 'build', 'icon.png'),
   ];
@@ -33,9 +41,38 @@ function appIconPath() {
 }
 
 function uiIndexPath() {
-  // Packaged: app.asar/dist/index.html (via app.getAppPath()).
-  // Dev packaged-path fallback: electron/../dist/index.html.
   return path.join(app.getAppPath(), 'dist', 'index.html');
+}
+
+function notifyBackground() {
+  try {
+    if (!Notification.isSupported()) return;
+    const note = new Notification({
+      title: 'WorkPulse is running in the background',
+      body: 'Login, breaks, and laptop activity keep tracking. Open from the system tray icon. Use Quit in the tray to stop.',
+      silent: true,
+    });
+    note.show();
+  } catch (err) {
+    console.warn('[tray] notify failed:', err);
+  }
+}
+
+function hideToTray(win) {
+  if (!win || win.isDestroyed()) return;
+  win.hide();
+  try {
+    win.setSkipTaskbar(true);
+  } catch {
+    // ignore
+  }
+  if (!hidToTrayNoticeShown) {
+    hidToTrayNoticeShown = true;
+    notifyBackground();
+  }
+  if (tray) {
+    tray.setToolTip('WorkPulse Employee — running in background');
+  }
 }
 
 function showMainWindow() {
@@ -43,9 +80,17 @@ function showMainWindow() {
     createWindow();
     return;
   }
+  try {
+    mainWindow.setSkipTaskbar(false);
+  } catch {
+    // ignore
+  }
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
+  if (tray) {
+    tray.setToolTip('WorkPulse Employee — tracking active');
+  }
 }
 
 function createTray() {
@@ -53,32 +98,37 @@ function createTray() {
   const iconFile = appIconPath();
   let image = iconFile ? nativeImage.createFromPath(iconFile) : nativeImage.createEmpty();
   if (image.isEmpty()) {
-    // 16x16 placeholder so Tray still constructs on Windows
     image = nativeImage.createFromDataURL(
       'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAAAHElEQVQoz2NgGAWjYBSMglEwCkbBKBgFo4D6AQB8AAH/YYvH1gAAAABJRU5ErkJggg=='
     );
   }
   tray = new Tray(image);
-  tray.setToolTip('WorkPulse Employee — tracking stays on while in tray');
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: 'Open WorkPulse', click: () => showMainWindow() },
-      { type: 'separator' },
-      {
-        label: 'Quit',
-        click: () => {
-          isQuitting = true;
-          try {
-            powerPresence.recordAppCloseBreak();
-          } catch (err) {
-            console.warn('[tray] recordAppCloseBreak failed:', err);
-          }
-          app.quit();
+  tray.setToolTip('WorkPulse Employee — tracking active');
+  const rebuildMenu = () => {
+    tray.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: 'WorkPulse is running in the background', enabled: false },
+        { type: 'separator' },
+        { label: 'Open WorkPulse', click: () => showMainWindow() },
+        { type: 'separator' },
+        {
+          label: 'Quit (stop tracking)',
+          click: () => {
+            isQuitting = true;
+            try {
+              powerPresence.recordAppCloseBreak();
+            } catch (err) {
+              console.warn('[tray] recordAppCloseBreak failed:', err);
+            }
+            app.quit();
+          },
         },
-      },
-    ])
-  );
+      ])
+    );
+  };
+  rebuildMenu();
   tray.on('double-click', () => showMainWindow());
+  tray.on('click', () => showMainWindow());
 }
 
 function createWindow() {
@@ -96,22 +146,30 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      // Keep presence / break / activity timers alive while hidden in the tray.
+      backgroundThrottling: false,
     },
   });
 
   const win = mainWindow;
   const reveal = () => {
-    if (!win.isDestroyed() && !win.isVisible()) win.show();
+    if (!win.isDestroyed() && !win.isVisible()) {
+      win.show();
+      try {
+        win.setSkipTaskbar(false);
+      } catch {
+        // ignore
+      }
+    }
   };
   win.once('ready-to-show', reveal);
-  // If HTML/assets fail to load, still show a window instead of staying invisible.
   setTimeout(reveal, 4000);
 
-  // Closing the X hides to tray — idle/break tracking must keep running.
+  // X / Alt+F4 → background (tray), not quit.
   win.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault();
-      win.hide();
+      hideToTray(win);
       return;
     }
     try {
@@ -121,13 +179,22 @@ function createWindow() {
     }
   });
 
+  // Minimize also goes to tray so employees do not leave a taskbar entry only.
+  win.on('minimize', (event) => {
+    if (isQuitting) return;
+    event.preventDefault();
+    hideToTray(win);
+  });
+
   win.webContents.on('did-fail-load', (_e, code, desc, url) => {
     console.error('[ui] did-fail-load', { code, desc, url });
     reveal();
     const message = encodeURIComponent(
       `WorkPulse could not load its UI (${desc || code}). Reinstall the latest setup, or contact support.`
     );
-    win.loadURL(`data:text/html,<h3 style="font-family:sans-serif;padding:24px">WorkPulse failed to open</h3><p style="font-family:sans-serif;padding:0 24px;color:#334155">${message}</p>`);
+    win.loadURL(
+      `data:text/html,<h3 style="font-family:sans-serif;padding:24px">WorkPulse failed to open</h3><p style="font-family:sans-serif;padding:0 24px;color:#334155">${message}</p>`
+    );
   });
 
   if (isDev) {
@@ -174,6 +241,20 @@ async function catchUpPowerBootEvents() {
   if (latest > since) powerPresence.setWatermark(latest);
 }
 
+function enableStartWithWindows() {
+  if (isDev) return;
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: true,
+      openAsHidden: true,
+      path: process.execPath,
+      args: ['--hidden'],
+    });
+  } catch (err) {
+    console.warn('[startup] setLoginItemSettings failed:', err);
+  }
+}
+
 function registerIpc() {
   ipcMain.handle('wp:saveSecureToken', async (_e, key, value) => {
     await native.saveSecureToken(key, value);
@@ -205,7 +286,6 @@ function registerIpc() {
     const title = String(payload?.title || 'WorkPulse');
     const body = String(payload?.body || '');
     try {
-      const { Notification } = require('electron');
       if (!Notification.isSupported()) return { ok: false, reason: 'unsupported' };
       const note = new Notification({ title, body, silent: false });
       note.show();
@@ -217,31 +297,42 @@ function registerIpc() {
   });
 }
 
-app.whenReady().then(async () => {
-  registerIpc();
-  powerPresence.registerPowerMonitor();
-  updater.startUpdater({
-    channel: process.env.VITE_RELEASE_CHANNEL || 'production',
-  });
-  createWindow();
-  createTray();
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-    else showMainWindow();
-  });
-});
+if (gotLock) {
+  app.whenReady().then(async () => {
+    registerIpc();
+    powerPresence.registerPowerMonitor();
+    enableStartWithWindows();
+    updater.startUpdater({
+      channel: process.env.VITE_RELEASE_CHANNEL || 'production',
+    });
+    createWindow();
+    createTray();
 
-app.on('before-quit', () => {
-  isQuitting = true;
-  try {
-    powerPresence.recordAppCloseBreak();
-  } catch {
-    // ignore
-  }
-});
+    // Launch hidden after Windows login / shortcut with --hidden.
+    if (process.argv.includes('--hidden')) {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        hideToTray(mainWindow);
+      }
+    }
 
-app.on('window-all-closed', () => {
-  // Stay alive in the tray on Windows so idle breaks still record.
-  if (process.platform === 'darwin') return;
-  if (isQuitting) app.quit();
-});
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      else showMainWindow();
+    });
+  });
+
+  app.on('before-quit', () => {
+    isQuitting = true;
+    try {
+      powerPresence.recordAppCloseBreak();
+    } catch {
+      // ignore
+    }
+  });
+
+  app.on('window-all-closed', () => {
+    // Stay alive in the tray on Windows so tracking continues in the background.
+    if (process.platform === 'darwin') return;
+    if (isQuitting) app.quit();
+  });
+}
