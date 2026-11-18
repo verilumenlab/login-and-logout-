@@ -1,29 +1,11 @@
-# Web portal (HR / Admin / Manager), deployed as a static export.
-# Backend: https://workpulse-api-pm0x.onrender.com (Render). Auto-deploy from GitHub main.
+# Portal moved to Vercel. Do not deploy this repo from Netlify.
+# Disconnect: Netlify → Site configuration → General → Delete site
+# (or Site configuration → Build & deploy → Stop auto publishing).
+#
+# Backend stays on Render: https://workpulse-api-pm0x.onrender.com
+# Portal: https://login-and-logout-ef7g-support-55072731.vercel.app
+#
+# The srots-mail Netlify app is separate and still used for email only.
+
 [build]
-  base = "web"
-  command = "npm run build"
-  publish = "out"
-
-[build.environment]
-  NODE_VERSION = "20"
-  NEXT_TELEMETRY_DISABLED = "1"
-  NEXT_PUBLIC_API_URL = "https://workpulse-api-pm0x.onrender.com/api/v1"
-
-[[headers]]
-  for = "/*"
-  [headers.values]
-    X-Frame-Options = "DENY"
-    X-Content-Type-Options = "nosniff"
-    Referrer-Policy = "strict-origin-when-cross-origin"
-
-# Next static export writes /missing-login.html — keep pretty URLs working.
-[[redirects]]
-  from = "/missing-login"
-  to = "/missing-login.html"
-  status = 200
-
-[[redirects]]
-  from = "/missing-login/"
-  to = "/missing-login.html"
-  status = 200
+  ignore = "exit 1"

@@ -1,4 +1,4 @@
-# WorkPulse backend on Render (Blueprint). Web portal is on Netlify, employee app is the desktop installer.
+# WorkPulse backend on Render (Blueprint). Web portal is on Vercel, employee app is the desktop installer.
 # Render dashboard > New > Blueprint > pick this repo. You will be asked for the values marked sync: false.
 #
 # Plans: "free" works for testing, but a free web service sleeps after 15 idle minutes (first request then takes
@@ -46,11 +46,11 @@ services:
           name: workpulse-redis
           property: connectionString
       - key: BACKEND_CORS_ORIGINS
-        value: '["https://workloginandlogout-07d13a.netlify.app","http://localhost:3000","http://127.0.0.1:3000","tauri://localhost","http://tauri.localhost","https://tauri.localhost","http://localhost:1420"]'
+        value: '["https://login-and-logout-ef7g-support-55072731.vercel.app","http://localhost:3000","http://127.0.0.1:3000","tauri://localhost","http://tauri.localhost","https://tauri.localhost","http://localhost:1420"]'
       - key: BACKEND_CORS_ORIGIN_REGEX
-        value: ^https://([a-z0-9-]+--)?workloginandlogout-07d13a\.netlify\.app$
+        value: ^https://login-and-logout-ef7g(-[a-z0-9]+)*\.vercel\.app$
       - key: FRONTEND_BASE_URL
-        value: https://workloginandlogout-07d13a.netlify.app
+        value: https://login-and-logout-ef7g-support-55072731.vercel.app
       - key: FORWARDED_ALLOW_IPS
         value: "*" # Render only exposes the service through its proxy
       # First-run setup (app/bootstrap.py): creates the organization and the first administrator.
