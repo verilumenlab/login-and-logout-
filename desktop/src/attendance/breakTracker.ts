@@ -158,19 +158,47 @@ export function handleBreakAwaySignal(signal: BreakAwayPayload, deviceId: string
   }
 }
 
-/** Poll idle and start/end AUTO_IDLE breaks. */
+/**
+ * Poll idle and start/end automatic breaks.
+ *
+ * Important: lock/sleep breaks used to stay open forever if UNLOCK/RESUME was missed
+ * (app restart, crash). That blocked every later idle break for the day. Any AUTO_*
+ * break now ends as soon as the employee is active again (idle under 60s).
+ */
 export async function evaluateIdleBreak(deviceId: string): Promise<void> {
   const idle = await getSystemIdleSeconds();
   const open = getOpenBreak();
+
+  // Back at the keyboard/mouse → close idle, lock, or sleep break.
+  if (open && String(open.source || '').startsWith('AUTO') && idle < IDLE_BREAK_END_SECONDS) {
+    endAutoBreak(deviceId, new Date().toISOString());
+    return;
+  }
+
   if (!open && idle >= IDLE_BREAK_START_SECONDS) {
     // Idle start time is approximately now - idle seconds
     const started = new Date(Date.now() - idle * 1000).toISOString();
     startAutoBreak('AUTO_IDLE', deviceId, started);
-    return;
   }
-  if (open?.source === 'AUTO_IDLE' && idle < IDLE_BREAK_END_SECONDS) {
-    endAutoBreak(deviceId, new Date().toISOString());
-  }
+}
+
+/**
+ * Close a server-side open break when local open-break state was lost
+ * (app restart / cleared storage) but the employee is active again.
+ */
+export function closeOrphanServerBreak(deviceId: string): boolean {
+  if (getOpenBreak()) return false;
+  const occurredAt = new Date().toISOString();
+  const id = `brk:end:ORPHAN:${shortTag(deviceId)}:${Date.parse(occurredAt) || Date.now()}`;
+  enqueue([
+    {
+      client_event_id: id,
+      action: 'BREAK_END',
+      occurred_at: occurredAt,
+      notes: 'auto:end:orphan_reconcile',
+    },
+  ]);
+  return true;
 }
 
 export async function flushBreakQueue(): Promise<number> {

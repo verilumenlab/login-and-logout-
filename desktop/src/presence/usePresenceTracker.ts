@@ -3,14 +3,23 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   BreakAwayPayload,
   getConnectedWifiInfo,
+  getSystemIdleSeconds,
   onBreakAwayQueued,
   onPowerEventQueued,
   setPresenceSession,
   showDesktopNotification,
 } from '../api/ipc';
-import { DeviceBlockedError, NetworkError, SessionExpiredError, pingBackend } from '../api/backend';
 import {
+  DeviceBlockedError,
+  NetworkError,
+  SessionExpiredError,
+  getAttendanceStatus,
+  pingBackend,
+} from '../api/backend';
+import {
+  IDLE_BREAK_END_SECONDS,
   bindBreakQueueToUser,
+  closeOrphanServerBreak,
   endAutoBreak,
   evaluateIdleBreak,
   flushBreakQueue,
@@ -48,6 +57,20 @@ import {
 } from './tracker';
 
 const POLL_INTERVAL_MS = 15_000;
+const WORK_LOGIN_KEY = '__work_logged_in_v1';
+
+function readPersistedWorkLogin(): boolean | null {
+  const raw = localStorage.getItem(WORK_LOGIN_KEY);
+  if (raw === '1') return true;
+  if (raw === '0') return false;
+  return null;
+}
+
+function persistWorkLogin(value: boolean | null): void {
+  if (value === true) localStorage.setItem(WORK_LOGIN_KEY, '1');
+  else if (value === false) localStorage.setItem(WORK_LOGIN_KEY, '0');
+  else localStorage.removeItem(WORK_LOGIN_KEY);
+}
 
 export type BreakTrackerStatus = {
   isOnBreak: boolean;
@@ -91,11 +114,16 @@ export function usePresenceTracker(
   const [version, setVersion] = useState(0);
   const running = useRef(false);
   const appLoginQueued = useRef(false);
-  const loggedInRef = useRef<boolean | null>(null);
+  const loggedInRef = useRef<boolean | null>(readPersistedWorkLogin());
   const noticeRef = useRef(onNotice);
   noticeRef.current = onNotice;
   const workdayCheckRef = useRef(onWorkdayCheck);
   workdayCheckRef.current = onWorkdayCheck;
+
+  const setWorkLoggedIn = useCallback((value: boolean | null) => {
+    loggedInRef.current = value;
+    persistWorkLogin(value);
+  }, []);
 
   const refreshBreakStatus = useCallback(() => {
     const open = getOpenBreak();
@@ -128,11 +156,11 @@ export function usePresenceTracker(
       try {
         await flushBreakQueue();
         await flushQueue();
-        loggedInRef.current = false;
+        setWorkLoggedIn(false);
         setStatus((prev) => ({ ...prev, isLoggedIn: false }));
         return true;
       } catch (err) {
-        loggedInRef.current = false;
+        setWorkLoggedIn(false);
         setStatus((prev) => ({ ...prev, isLoggedIn: false }));
         if (err instanceof DeviceBlockedError) {
           onSessionExpired('blocked');
@@ -142,7 +170,7 @@ export function usePresenceTracker(
         return false;
       }
     },
-    [device, onSessionExpired]
+    [device, onSessionExpired, setWorkLoggedIn]
   );
 
   const tick = useCallback(async () => {
@@ -150,10 +178,6 @@ export function usePresenceTracker(
     running.current = true;
     try {
       await ingestPowerEventsFromMain();
-      // Breaks only while work-logged-in (not merely signed into the app).
-      if (loggedInRef.current === true) {
-        await evaluateIdleBreak(device.device_id);
-      }
 
       const wifi = await getConnectedWifiInfo();
       if (!appLoginQueued.current) {
@@ -177,6 +201,30 @@ export function usePresenceTracker(
         isOnline = await pingBackend();
       }
 
+      // Prefer server truth from this flush; otherwise keep persisted work-login flag.
+      if (isLoggedIn === true || isLoggedIn === false) {
+        setWorkLoggedIn(isLoggedIn);
+      }
+      const workOpen = isLoggedIn ?? loggedInRef.current;
+
+      // Breaks only while work-logged-in — evaluate AFTER login state is known.
+      if (workOpen === true) {
+        await evaluateIdleBreak(device.device_id);
+        try {
+          const idle = await getSystemIdleSeconds();
+          if (idle < IDLE_BREAK_END_SECONDS && !getOpenBreak() && pendingBreakCount() === 0) {
+            const statusNow = await getAttendanceStatus();
+            if (statusNow.mode === 'ON_BREAK') {
+              closeOrphanServerBreak(device.device_id);
+            }
+          }
+        } catch (err) {
+          if (!(err instanceof NetworkError)) {
+            console.warn('[break] status reconcile failed:', err);
+          }
+        }
+      }
+
       if (pendingBreakCount() > 0) {
         try {
           await flushBreakQueue();
@@ -186,8 +234,6 @@ export function usePresenceTracker(
           }
         }
       }
-
-      const workOpen = isLoggedIn ?? loggedInRef.current;
       if (workOpen === true) {
         const worked = workedMinutesNow();
 
@@ -231,10 +277,12 @@ export function usePresenceTracker(
       }
 
       const nextLoggedIn = isLoggedIn ?? loggedInRef.current;
-      loggedInRef.current = nextLoggedIn;
+      if (nextLoggedIn === true || nextLoggedIn === false) {
+        setWorkLoggedIn(nextLoggedIn);
+      }
       setStatus({
         isOnline,
-        pendingEvents: pendingEventCount(),
+        pendingEvents: pendingEventCount() + pendingBreakCount(),
         lastSyncAt: lastSyncTime(),
         wifi,
         isLoggedIn: nextLoggedIn,
@@ -252,7 +300,7 @@ export function usePresenceTracker(
     } finally {
       running.current = false;
     }
-  }, [device, onSessionExpired, refreshBreakStatus, performWorkLogout]);
+  }, [device, onSessionExpired, refreshBreakStatus, performWorkLogout, setWorkLoggedIn]);
 
   useEffect(() => {
     if (!active || !device || !session) {
@@ -309,8 +357,11 @@ export function usePresenceTracker(
           void tick();
           return;
         }
-        handleBreakAwaySignal(payload, device.device_id);
-        refreshBreakStatus();
+        // Lock/sleep breaks only while on the clock — avoids overnight orphan breaks.
+        if (loggedInRef.current === true) {
+          handleBreakAwaySignal(payload, device.device_id);
+          refreshBreakStatus();
+        }
         void tick();
       })();
     });
@@ -366,7 +417,7 @@ export function usePresenceTracker(
     const wifi = await getConnectedWifiInfo();
     queueAppEvent('APP_LOGIN', device.device_id, wifi.is_wifi ? wifi.ssid : undefined);
     syncWorkStart(new Date());
-    loggedInRef.current = true;
+    setWorkLoggedIn(true);
     setStatus((prev) => ({ ...prev, isLoggedIn: true }));
     setVersion((v) => v + 1);
     try {
@@ -385,7 +436,7 @@ export function usePresenceTracker(
     // Do not await tick — if a poller cycle is already running, awaiting it
     // never resolves the click handler and the UI stays on "Logging in…".
     void tick();
-  }, [device, tick, onSessionExpired]);
+  }, [device, tick, onSessionExpired, setWorkLoggedIn]);
 
   const recordWorkLogout = useCallback(
     async (reason?: WorkdayLogoutReason | null) => {

@@ -356,6 +356,18 @@ export function syncOfflineAttendance(events: OfflineAttendanceItem[]): Promise<
   });
 }
 
+export type CurrentAttendanceStatus = {
+  mode: 'CLOCKED_OUT' | 'CLOCKED_IN' | 'ON_BREAK' | string;
+  work_date?: string | null;
+  total_break_minutes?: number;
+  current_break?: { start_time?: string; break_type?: string } | null;
+};
+
+/** Live clock/break mode for the signed-in employee. */
+export function getAttendanceStatus(): Promise<CurrentAttendanceStatus> {
+  return request<CurrentAttendanceStatus>('/attendance/status');
+}
+
 // ---------------------------------------------------------------------------
 // Leave
 // ---------------------------------------------------------------------------
