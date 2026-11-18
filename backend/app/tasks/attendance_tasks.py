@@ -55,14 +55,14 @@ def generate_daily_attendance_summary(date_str: str) -> dict:
 @celery_app.task(name="tasks.attendance.missing_login_alert")
 def missing_login_alert() -> dict[str, Any]:
     """
-    Every ~10 minutes: after 10:30 IST, queue PENDING missing-login alerts
-    for Admin/HR approval. Emails are not sent until approved.
+    Every ~10 minutes: after 10:30 IST, email anyone still not logged in
+    (employee + manager + HR + admin, with name and email).
     """
     from app.services.missing_login_alert import run_missing_login_alerts
 
     async def _execute():
         async with AsyncSessionLocal() as db:
-            return await run_missing_login_alerts(db)
+            return await run_missing_login_alerts(db, auto_send=True)
 
     try:
         result = run_async(_execute())

@@ -23,9 +23,10 @@ export default function MissingLoginApprovalPage() {
   const [scanning, setScanning] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<MissingLoginAlert[]>([]);
-  const [filter, setFilter] = useState<'PENDING' | 'ALL'>('PENDING');
+  const [filter, setFilter] = useState<'PENDING' | 'ALL'>('ALL');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const didAutoScan = React.useRef(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -44,25 +45,31 @@ export default function MissingLoginApprovalPage() {
     }
   }, [filter]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const handleScan = async () => {
+  const handleScan = useCallback(async (silent = false) => {
     setScanning(true);
-    setError(null);
-    setNotice(null);
+    if (!silent) {
+      setError(null);
+      setNotice(null);
+    }
     try {
       const result = await apiClient.scanMissingLoginAlerts();
       if (result.status === 'skipped') {
-        setNotice(
-          result.reason === 'before_missing_login_cutoff'
-            ? 'Before 10:30 IST — scan skipped. Try again after the grace cutoff.'
-            : `Scan skipped: ${result.reason || 'unknown'}`
-        );
+        if (!silent) {
+          setNotice(
+            result.reason === 'before_missing_login_cutoff'
+              ? 'Before 10:30 IST — scan skipped. Try again after the grace cutoff.'
+              : `Scan skipped: ${result.reason || 'unknown'}`
+          );
+        }
       } else {
+        const sent = result.sent_count ?? 0;
+        const pending = result.queued_count ?? 0;
         setNotice(
-          `Queued ${result.queued_count ?? 0} employee(s) for ${result.work_date || 'today'}. Approve to send mail.`
+          sent > 0
+            ? `Sent mail for ${sent} employee(s) not logged in (${result.work_date || 'today'}) — employee, manager, HR, admin.`
+            : pending > 0
+              ? `Queued ${pending} employee(s); mail pending retry.`
+              : `No new missing logins for ${result.work_date || 'today'}.`
         );
       }
       await load();
@@ -71,7 +78,18 @@ export default function MissingLoginApprovalPage() {
     } finally {
       setScanning(false);
     }
-  };
+  }, [load]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // After page open, scan once so today's not-logged-in people get mail without waiting for Celery.
+  useEffect(() => {
+    if (didAutoScan.current) return;
+    didAutoScan.current = true;
+    void handleScan(true);
+  }, [handleScan]);
 
   const handleApprove = async (item: MissingLoginAlert) => {
     if (
@@ -154,11 +172,11 @@ export default function MissingLoginApprovalPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
             <ShieldAlert className="w-6 h-6 text-amber-600" />
-            Missing Login Approvals
+            Missing Login
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            After 10:30 IST, employees who have not logged in appear here. Admin/HR must approve before
-            mail is sent (name + email to employee, manager, HR, and admin).
+            After 10:30 IST, anyone still not logged in is emailed automatically — the person, their
+            manager, HR, and admin — with name and email. Use Scan &amp; send to run again now.
           </p>
         </div>
 
@@ -168,16 +186,16 @@ export default function MissingLoginApprovalPage() {
             onChange={(e) => setFilter(e.target.value as 'PENDING' | 'ALL')}
             className="text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2"
           >
-            <option value="PENDING">Pending only</option>
             <option value="ALL">All statuses</option>
+            <option value="PENDING">Pending only</option>
           </select>
           <button
-            onClick={handleScan}
+            onClick={() => void handleScan(false)}
             disabled={scanning || loading}
             className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 hover:opacity-90 disabled:opacity-50"
           >
             {scanning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UserX className="w-3.5 h-3.5" />}
-            Scan now
+            Scan &amp; send
           </button>
           <button
             onClick={handleApproveAll}
@@ -234,7 +252,7 @@ export default function MissingLoginApprovalPage() {
               ) : alerts.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="py-10 text-center text-slate-400">
-                    No alerts{filter === 'PENDING' ? ' pending approval' : ''}. Use Scan now after 10:30 IST.
+                    No alerts{filter === 'PENDING' ? ' pending' : ''}. Use Scan &amp; send after 10:30 IST.
                   </td>
                 </tr>
               ) : (

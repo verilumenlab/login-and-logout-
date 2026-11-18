@@ -51,6 +51,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     for offset in (0, 1, 2):
                         await repair_evening_sleep_logouts(db, emp_ids, today - timedelta(days=offset))
             await db.commit()
+
+            # After 10:30 IST, email anyone still not logged in (employee + manager + HR + admin).
+            try:
+                from app.services.missing_login_alert import run_missing_login_alerts
+
+                await run_missing_login_alerts(db, auto_send=True)
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).exception("Startup missing-login alert failed")
     except Exception:
         # Never block API startup if policy sync fails (e.g. migrations pending).
         import logging

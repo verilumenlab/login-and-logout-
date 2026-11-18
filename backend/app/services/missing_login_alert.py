@@ -1,8 +1,13 @@
 """
 Missing login alert after grace window (10:30 Asia/Kolkata).
 
-After 10:30, queue pending alerts for employees who have not logged in.
-Admin must approve before emails are sent to employee + manager + HR + admin.
+After 10:30, find employees who have not logged in and email:
+  - the employee (name + email — please log in)
+  - their manager(s)
+  - HR
+  - Admin
+
+Emails send automatically (Celery or Scan now). History is kept on Missing Login.
 """
 
 from __future__ import annotations
@@ -38,8 +43,10 @@ HR_ADMIN_ROLE_NAMES = (
     "HR Manager",
     "Administrator",
     "Super Administrator",
+    "Super Admin",
     "Admin",
     "HR",
+    "Human Resources",
 )
 
 
@@ -180,10 +187,11 @@ async def run_missing_login_alerts(
     *,
     now: datetime | None = None,
     organization_id: uuid.UUID | None = None,
+    auto_send: bool = True,
 ) -> dict[str, Any]:
     """
-    After 10:30 local, create PENDING approval rows for employees with no login.
-    Does NOT send email until an Admin/HR approves.
+    After 10:30 local, create alerts for employees with no login and (by default)
+    email the employee + manager + HR + admin with the person's name and email.
     """
     now = ensure_utc(now) or datetime.now(UTC)
     work_date = local_work_date(now)
@@ -197,6 +205,7 @@ async def run_missing_login_alerts(
             "cutoff": cutoff.isoformat(),
             "queued_employees": [],
             "queued_count": 0,
+            "sent_count": 0,
         }
 
     org_stmt = select(Organization).where(Organization.is_active.is_(True))
@@ -205,6 +214,7 @@ async def run_missing_login_alerts(
     orgs = (await db.execute(org_stmt)).scalars().all()
 
     queued: list[dict[str, Any]] = []
+    sent_rows: list[dict[str, Any]] = []
 
     for org in orgs:
         default_schedule = (
@@ -316,7 +326,7 @@ async def run_missing_login_alerts(
 
             prior = existing_by_emp.get(emp.id)
             if prior is not None:
-                # Already queued / decided for today — do not recreate.
+                # Already handled today — do not recreate or re-send.
                 continue
 
             employee_name = f"{emp.first_name} {emp.last_name}".strip()
@@ -333,14 +343,37 @@ async def run_missing_login_alerts(
                 status=MissingLoginAlertStatus.PENDING,
             )
             db.add(alert)
-            queued.append(
-                {
-                    "employee_id": str(emp.id),
-                    "employee_name": employee_name,
-                    "employee_email": employee_email,
-                    "status": MissingLoginAlertStatus.PENDING.value,
-                }
-            )
+            await db.flush()
+
+            row = {
+                "employee_id": str(emp.id),
+                "employee_name": employee_name,
+                "employee_email": employee_email,
+                "status": MissingLoginAlertStatus.PENDING.value,
+                "emails_sent_count": 0,
+            }
+
+            if auto_send:
+                try:
+                    notified = await _send_alert_emails(db, alert)
+                    alert.status = MissingLoginAlertStatus.SENT
+                    alert.reviewed_at = now
+                    alert.review_note = "Auto-sent after 10:30 — employee not logged in"
+                    alert.emails_sent_count = len(notified)
+                    row["status"] = MissingLoginAlertStatus.SENT.value
+                    row["emails_sent_count"] = len(notified)
+                    row["notified"] = notified
+                    sent_rows.append(row)
+                except Exception:
+                    logger.exception(
+                        "Failed auto-sending missing-login mail for %s (%s)",
+                        employee_name,
+                        employee_email,
+                    )
+                    row["status"] = MissingLoginAlertStatus.PENDING.value
+                    queued.append(row)
+            else:
+                queued.append(row)
 
         await db.commit()
 
@@ -350,7 +383,13 @@ async def run_missing_login_alerts(
         "cutoff": cutoff.isoformat(),
         "queued_count": len(queued),
         "queued_employees": queued,
-        "note": "Emails are held until Admin/HR approves each alert.",
+        "sent_count": len(sent_rows),
+        "sent_employees": sent_rows,
+        "note": (
+            "Emails sent automatically to employee, manager, HR, and admin (name + email included)."
+            if auto_send
+            else "Emails held until Admin/HR approves each alert."
+        ),
     }
 
 

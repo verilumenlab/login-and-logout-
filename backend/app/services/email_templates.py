@@ -638,7 +638,7 @@ Portal: {dashboard_url}/attendance
           </div>
           
           <div class="btn-container">
-            <a href="{dashboard_url}/missing-login" class="btn">Open Missing Login Approvals</a>
+            <a href="{dashboard_url}/missing-login" class="btn">Open Missing Login</a>
           </div>
         """,
         "text": """

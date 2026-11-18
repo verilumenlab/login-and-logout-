@@ -349,8 +349,8 @@ async def trigger_missing_login_alert(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """
-    Scan today after 10:30 IST and queue PENDING missing-login alerts.
-    Does not send mail until Admin/HR approves each alert.
+    Scan today after 10:30 IST for employees who have not logged in,
+    then email the employee + manager + HR + admin (name and email included).
     """
     from app.services.missing_login_alert import run_missing_login_alerts
 
@@ -358,6 +358,7 @@ async def trigger_missing_login_alert(
         db,
         now=datetime.now(UTC),
         organization_id=current_user.organization_id,
+        auto_send=True,
     )
     return result
 

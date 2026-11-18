@@ -170,7 +170,7 @@ async def test_skips_before_1030(db_session: AsyncSession, missing_login_env):
 
 
 @pytest.mark.asyncio
-async def test_queues_pending_until_admin_approves(
+async def test_auto_sends_to_employee_manager_hr_admin(
     db_session: AsyncSession, missing_login_env
 ):
     org = missing_login_env["org"]
@@ -182,18 +182,10 @@ async def test_queues_pending_until_admin_approves(
     now_utc = _weekday_after_cutoff().astimezone(UTC)
 
     result = await run_missing_login_alerts(
-        db_session, now=now_utc, organization_id=org.id
+        db_session, now=now_utc, organization_id=org.id, auto_send=True
     )
     assert result["status"] == "success"
-    assert result["queued_count"] == 1
-
-    # No emails until approval
-    outboxes = (
-        await db_session.execute(
-            select(EmailOutbox).where(EmailOutbox.organization_id == org.id)
-        )
-    ).scalars().all()
-    assert len(outboxes) == 0
+    assert result["sent_count"] == 1
 
     alert = (
         await db_session.execute(
@@ -203,24 +195,53 @@ async def test_queues_pending_until_admin_approves(
         )
     ).scalars().first()
     assert alert is not None
-    assert alert.status == MissingLoginAlertStatus.PENDING
+    assert alert.status == MissingLoginAlertStatus.SENT
     assert alert.employee_email == emp_user.email.lower()
+    assert alert.emails_sent_count >= 3
 
-    # Approve → send
-    sent = await approve_missing_login_alert(db_session, alert.id, reviewer=admin_user)
-    assert sent.status == MissingLoginAlertStatus.SENT
-    assert sent.emails_sent_count >= 3
-
-    outboxes2 = (
+    outboxes = (
         await db_session.execute(
             select(EmailOutbox).where(EmailOutbox.organization_id == org.id)
         )
     ).scalars().all()
-    recipient_emails = {o.recipient_email for o in outboxes2}
+    recipient_emails = {o.recipient_email for o in outboxes}
     assert emp_user.email.lower() in recipient_emails
     assert mgr_user.email.lower() in recipient_emails
     assert hr_user.email.lower() in recipient_emails
     assert admin_user.email.lower() in recipient_emails
+
+
+@pytest.mark.asyncio
+async def test_pending_mode_requires_approve(
+    db_session: AsyncSession, missing_login_env
+):
+    org = missing_login_env["org"]
+    emp_user, emp = missing_login_env["emp"]
+    admin_user, _ = missing_login_env["admin"]
+
+    now_utc = _weekday_after_cutoff().astimezone(UTC)
+    result = await run_missing_login_alerts(
+        db_session, now=now_utc, organization_id=org.id, auto_send=False
+    )
+    assert result["queued_count"] == 1
+    alert = (
+        await db_session.execute(
+            select(MissingLoginAlert).where(MissingLoginAlert.employee_id == emp.id)
+        )
+    ).scalars().first()
+    assert alert is not None
+    assert alert.status == MissingLoginAlertStatus.PENDING
+
+    sent = await approve_missing_login_alert(db_session, alert.id, reviewer=admin_user)
+    assert sent.status == MissingLoginAlertStatus.SENT
+    assert emp_user.email.lower() in {
+        o.recipient_email
+        for o in (
+            await db_session.execute(
+                select(EmailOutbox).where(EmailOutbox.organization_id == org.id)
+            )
+        ).scalars().all()
+    }
 
 
 @pytest.mark.asyncio
