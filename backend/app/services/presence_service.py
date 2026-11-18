@@ -1295,9 +1295,10 @@ async def get_team_presence(
 
     # Close overnight open sessions from earlier days before building today's board.
     await _autoclose_prior_open_sessions(db, ids, before_date=work_date, now=now)
-    # Fix selected day + previous day (last two days) for evening sleep/shutdown logouts.
+    # Fix selected day + previous two days (e.g. open 18 → also repair 17 and 16).
     await repair_evening_sleep_logouts(db, ids, work_date)
     await repair_evening_sleep_logouts(db, ids, work_date - timedelta(days=1))
+    await repair_evening_sleep_logouts(db, ids, work_date - timedelta(days=2))
 
     att_days = (
         await db.execute(

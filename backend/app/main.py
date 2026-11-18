@@ -47,8 +47,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     ).scalars().all()
                 )
                 if emp_ids:
-                    await repair_evening_sleep_logouts(db, emp_ids, today)
-                    await repair_evening_sleep_logouts(db, emp_ids, today - timedelta(days=1))
+                    # Today + previous two calendar days (e.g. 18, 17, 16).
+                    for offset in (0, 1, 2):
+                        await repair_evening_sleep_logouts(db, emp_ids, today - timedelta(days=offset))
             await db.commit()
     except Exception:
         # Never block API startup if policy sync fails (e.g. migrations pending).
