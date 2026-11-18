@@ -2,7 +2,18 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ChevronDown, ChevronLeft, ChevronRight, Download, LogIn, RefreshCw, Search, Wifi } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Loader2,
+  LogIn,
+  Mail,
+  RefreshCw,
+  Search,
+  Wifi,
+} from 'lucide-react';
 import { apiClient, TeamPresenceResponse, TeamPresenceRow, TeamPresenceStatus } from '@/lib/api-client';
 import { useRole } from '@/components/RoleContext';
 import { formatDuration, formatTime, localDateInput, shiftDate } from '@/lib/format';
@@ -92,15 +103,18 @@ function liveMinutes(row: TeamPresenceRow, workDate: string): number {
 
 export default function PresencePage() {
   const { role } = useRole();
+  const canSendMissingMail = role === 'ADMIN' || role === 'HR' || role === 'MANAGER';
   const today = localDateInput(new Date());
   const [date, setDate] = useState(today);
   const [data, setData] = useState<TeamPresenceResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('ALL');
   const [search, setSearch] = useState('');
   const [exportOpen, setExportOpen] = useState(false);
   const [exporting, setExporting] = useState<ExportPeriod | null>(null);
+  const [sendingMissingMail, setSendingMissingMail] = useState(false);
   const exportRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
@@ -160,6 +174,55 @@ export default function PresencePage() {
     }
   };
 
+  const notLoggedInCount = data?.counts.not_logged_in ?? 0;
+
+  const sendNotLoggedInMail = async () => {
+    if (!canSendMissingMail) return;
+    const names = (data?.rows ?? [])
+      .filter((r) => r.status === 'NOT_LOGGED_IN')
+      .map((r) => r.full_name);
+    const preview =
+      names.length > 0
+        ? `\n\nNot logged in now:\n• ${names.join('\n• ')}`
+        : '\n\n(No one shows as Not logged in on this board — scan still runs after 10:30 IST.)';
+    if (
+      !confirm(
+        `Send “not logged in” email to each person who has not logged in after 10:30 IST?${preview}\n\nAlso notifies their manager, HR, and admin (name + email).`
+      )
+    ) {
+      return;
+    }
+    setSendingMissingMail(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await apiClient.scanMissingLoginAlerts();
+      if (result.status === 'skipped') {
+        setNotice(
+          result.reason === 'before_missing_login_cutoff'
+            ? 'Before 10:30 IST — mail is only sent after the grace cutoff.'
+            : `Skipped: ${result.reason || 'unknown'}`
+        );
+      } else {
+        const sent = result.sent_count ?? 0;
+        const people = (result.sent_employees ?? [])
+          .map((p) => `${p.employee_name} <${p.employee_email}>`)
+          .join(', ');
+        setNotice(
+          sent > 0
+            ? `Sent mail for ${sent} not-logged-in employee(s)${people ? `: ${people}` : ''}.`
+            : `No new missing-login mails for ${result.work_date || 'today'} (already sent or everyone logged in).`
+        );
+        setFilter('NOT_LOGGED_IN');
+      }
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not send not-logged-in mail');
+    } finally {
+      setSendingMissingMail(false);
+    }
+  };
+
   const tiles: { id: Filter; label: string; value: number; tone: string }[] = [
     { id: 'ALL', label: 'Employees', value: data?.counts.total ?? 0, tone: 'text-slate-900 dark:text-slate-100' },
     { id: 'LOGGED_IN', label: 'Logged in now', value: data?.counts.logged_in ?? 0, tone: 'text-emerald-600' },
@@ -213,6 +276,26 @@ export default function PresencePage() {
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
+          {canSendMissingMail && date === today && (
+            <button
+              type="button"
+              onClick={() => void sendNotLoggedInMail()}
+              disabled={sendingMissingMail || loading}
+              title="Email employees who have not logged in after 10:30 IST (also manager, HR, admin)"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold disabled:opacity-50"
+            >
+              {sendingMissingMail ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Mail className="w-3.5 h-3.5" />
+              )}
+              {sendingMissingMail
+                ? 'Sending…'
+                : notLoggedInCount > 0
+                  ? `Send not-login mail (${notLoggedInCount})`
+                  : 'Send not-login mail'}
+            </button>
+          )}
           <div className="relative" ref={exportRef}>
             <button
               onClick={() => setExportOpen((o) => !o)}
@@ -265,6 +348,11 @@ export default function PresencePage() {
       {error && (
         <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs">
           {error}
+        </div>
+      )}
+      {notice && (
+        <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs">
+          {notice}
         </div>
       )}
 

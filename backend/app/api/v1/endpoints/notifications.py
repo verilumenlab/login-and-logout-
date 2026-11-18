@@ -344,7 +344,17 @@ class MissingLoginReviewRequest(BaseModel):
 @router.post("/missing-login-alert")
 async def trigger_missing_login_alert(
     current_user: User = Depends(
-        require_role(["Admin", "Administrator", "Super Admin", "HR", "HR Manager"])
+        require_role(
+            [
+                "Admin",
+                "Administrator",
+                "Super Admin",
+                "Super Administrator",
+                "HR",
+                "HR Manager",
+                "Manager",
+            ]
+        )
     ),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:

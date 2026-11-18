@@ -1303,7 +1303,14 @@ export class ApiClient {
     status: string;
     work_date?: string;
     queued_count?: number;
+    sent_count?: number;
     queued_employees?: Array<{ employee_name: string; employee_email: string; status: string }>;
+    sent_employees?: Array<{
+      employee_name: string;
+      employee_email: string;
+      status: string;
+      emails_sent_count?: number;
+    }>;
     note?: string;
     reason?: string;
   }> {
