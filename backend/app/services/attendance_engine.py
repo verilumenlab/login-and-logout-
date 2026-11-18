@@ -143,7 +143,12 @@ def _paired_work_minutes(
                     first_in = ts
         elif is_clock_out(ev.event_type) and open_in is not None:
             total += _clip(open_in, ts)
-            last_out = ts
+            # Never store / return a logout past this work day (next-morning Wi-Fi
+            # disconnects used to show as "10:31 AM" with ~14h on the board).
+            capped = min(ts, day_end - timedelta(seconds=1))
+            if capped < open_in:
+                capped = min(open_in, day_end - timedelta(seconds=1))
+            last_out = capped
             open_in = None
 
     if open_in is not None:
@@ -352,8 +357,14 @@ def calculate_daily_attendance(
         if not b.is_paid:
             total_unpaid_break_minutes += dur
 
-    # 6. Net working minutes from paired sessions within the day
-    total_work_minutes = max(0, paired_minutes - total_unpaid_break_minutes)
+    # 6. Working minutes = full login→logout span. Breaks are tracked for display only
+    # (count + duration) and are NOT subtracted from worked hours.
+    total_work_minutes = max(0, paired_minutes)
+    if total_break_minutes > 0:
+        notes.append(
+            f"Breaks recorded: {len(sorted_breaks)} · {total_break_minutes}m "
+            "(shown separately; not deducted from worked time)"
+        )
     is_missing_checkout = False
 
     if first_clock_in and session_still_open:

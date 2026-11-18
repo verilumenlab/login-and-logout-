@@ -275,9 +275,9 @@ async def test_late_arrival_calculation(client: AsyncClient, setup_attendance_en
 @pytest.mark.asyncio
 async def test_breaks_lifecycle_and_net_duration(client: AsyncClient, setup_attendance_env):
     """
-    Scenario: Shift with lunch (unpaid 45m) and coffee (paid 15m).
+    Scenario: Shift with lunch (45m) and coffee (15m).
     Gross = 8 hours (480m).
-    Net working duration should be 480 - 45 = 435 minutes.
+    Breaks are recorded for display only and are NOT deducted from worked time.
     """
     data = setup_attendance_env
     headers = {"Authorization": f"Bearer {data['emp_token']}"}
@@ -336,8 +336,8 @@ async def test_breaks_lifecycle_and_net_duration(client: AsyncClient, setup_atte
         headers=headers,
     )
     out_data = out_resp.json()
-    assert out_data["total_break_minutes"] == 60  # 45m lunch + 15m coffee
-    assert out_data["total_work_minutes"] == 435  # 480m gross - 45m unpaid lunch
+    assert out_data["total_break_minutes"] == 60  # 45m lunch + 15m coffee (display only)
+    assert out_data["total_work_minutes"] == 480  # full login→logout; breaks not subtracted
 
 
 # ============================================================================

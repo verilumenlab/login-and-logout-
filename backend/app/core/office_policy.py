@@ -13,6 +13,8 @@ from datetime import time
 
 OFFICE_START = time(9, 30)
 OFFICE_END = time(18, 30)
+# After 6:00 PM local, laptop system sleep means the employee left → auto logout.
+SLEEP_LOGOUT_AFTER = time(18, 0)
 
 # Login after 09:30 is fine until 10:30 (still records actual login time).
 LATE_LOGIN_GRACE_MINUTES = 60

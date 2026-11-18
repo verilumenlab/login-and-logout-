@@ -9,10 +9,15 @@ const isDev = !app.isPackaged;
 function appIconPath() {
   const fs = require('node:fs');
   const candidates = [
+    // Packaged install: next to the .exe (NSIS shortcut uses {app}\\app.ico)
+    path.join(path.dirname(process.execPath || ''), 'app.ico'),
+    // Packaged: resources/app.ico (extraResources)
+    path.join(process.resourcesPath || '', 'app.ico'),
+    path.join(process.resourcesPath || '', 'icon.ico'),
+    path.join(process.resourcesPath || '', 'build', 'icon.ico'),
+    // Dev
     path.join(__dirname, '..', 'build', 'icon.ico'),
     path.join(__dirname, '..', 'build', 'icon.png'),
-    path.join(process.resourcesPath || '', 'build', 'icon.ico'),
-    path.join(process.resourcesPath || '', 'icon.ico'),
   ];
   for (const p of candidates) {
     try {

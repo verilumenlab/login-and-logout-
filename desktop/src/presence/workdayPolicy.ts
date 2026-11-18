@@ -20,7 +20,16 @@ export type WorkdayLogoutReason =
   | 'nine_hour_no_response'
   | 'nine_hour_extension_ended'
   | 'nine_hour_manual'
-  | 'eod_idle';
+  | 'eod_idle'
+  | 'eod_sleep'
+  | 'eod_shutdown';
+
+/** After 6:00 PM local, system sleep means left for the day → auto logout. */
+export const SLEEP_LOGOUT_AFTER_MINUTES = 18 * 60;
+
+export function isPastSleepLogoutTime(now = new Date()): boolean {
+  return now.getHours() * 60 + now.getMinutes() >= SLEEP_LOGOUT_AFTER_MINUTES;
+}
 
 const WORK_START_KEY_PREFIX = '__work_start_';
 const NINE_CONFIRMED_KEY = '__work_9h_confirmed_';
@@ -168,6 +177,10 @@ export function buildLogoutDetail(reason: WorkdayLogoutReason, workedMinutes: nu
       return `WORKDAY|COMPLETED_9H|CONFIRMED|${mins} — Logged out after completing 9 hours`;
     case 'eod_idle':
       return `WORKDAY|AUTO_LOGOUT|EOD_IDLE|${mins} — Auto-logout at 6:30 PM — laptop idle`;
+    case 'eod_sleep':
+      return `WORKDAY|AUTO_LOGOUT|EOD_SLEEP|${mins} — Auto-logout after 6:00 PM — laptop system sleep`;
+    case 'eod_shutdown':
+      return `WORKDAY|AUTO_LOGOUT|EOD_SHUTDOWN|${mins} — Auto-logout after 6:00 PM — laptop shut down`;
     default:
       return `WORKDAY|AUTO_LOGOUT|UNKNOWN|${mins}`;
   }
@@ -187,6 +200,10 @@ export function logoutNotice(reason: WorkdayLogoutReason): string {
       return 'Logged out after completing 9 hours.';
     case 'eod_idle':
       return 'Auto logged out at 6:30 PM — laptop was idle.';
+    case 'eod_sleep':
+      return 'Auto logged out — laptop went to sleep after 6:00 PM.';
+    case 'eod_shutdown':
+      return 'Auto logged out — laptop shut down after 6:00 PM.';
     default:
       return 'Logged out.';
   }

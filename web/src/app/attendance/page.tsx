@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Clock, Coffee, LogIn, LogOut, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 import { apiClient, PresenceDay, PresenceEvent, TeamPresenceRow } from '@/lib/api-client';
+import { correctedHistoryDay, isPowerOffCountedAsLogout } from '@/lib/attendanceDisplay';
 import { formatDuration, formatTime, localDateInput, shiftDate } from '@/lib/format';
 
 type RangeId = 'week' | 'two_weeks' | 'month' | 'custom';
@@ -88,7 +89,7 @@ export default function AttendancePage() {
 
   const totals = useMemo(() => {
     const worked = days.filter((d) => d.first_login);
-    const minutes = worked.reduce((sum, d) => sum + d.worked_minutes, 0);
+    const minutes = worked.reduce((sum, d) => sum + correctedHistoryDay(d).worked_minutes, 0);
     const breaks = days.reduce((sum, d) => sum + (d.break_count || 0), 0);
     const breakMinutes = days.reduce((sum, d) => sum + (d.total_break_minutes || 0), 0);
     const avgLogin = worked.length
@@ -238,6 +239,8 @@ export default function AttendancePage() {
             )}
             {days.map((d) => {
               const open = expanded === d.work_date;
+              const corrected = correctedHistoryDay(d);
+              const showActive = Boolean(d.is_logged_in && !corrected.powerOffEvent);
               return (
                 <React.Fragment key={d.work_date}>
                   <tr
@@ -252,9 +255,15 @@ export default function AttendancePage() {
                     </td>
                     <td className="px-4 py-3 tabular-nums">{formatTime(d.first_login)}</td>
                     <td className="px-4 py-3 tabular-nums">
-                      {d.is_logged_in ? <span className="text-emerald-600 font-semibold">Active</span> : formatTime(d.last_logout)}
+                      {showActive ? (
+                        <span className="text-emerald-600 font-semibold">Active</span>
+                      ) : (
+                        formatTime(corrected.last_logout)
+                      )}
                     </td>
-                    <td className="px-4 py-3 text-right tabular-nums">{d.first_login ? formatDuration(d.worked_minutes) : '—'}</td>
+                    <td className="px-4 py-3 text-right tabular-nums">
+                      {d.first_login ? formatDuration(corrected.worked_minutes) : '—'}
+                    </td>
                     <td className="px-4 py-3 text-right tabular-nums">
                       {(d.break_count || 0) > 0
                         ? `${d.break_count} · ${formatDuration(d.total_break_minutes || 0)}`
@@ -297,7 +306,7 @@ export default function AttendancePage() {
                                     counted as login
                                   </span>
                                 )}
-                                {ev.attendance_action === 'CLOCK_OUT' && (
+                                {isPowerOffCountedAsLogout(ev, d) && (
                                   <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-semibold">
                                     counted as logout
                                   </span>

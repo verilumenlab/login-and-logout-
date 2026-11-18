@@ -28,36 +28,48 @@ const STATUS_META: Record<TeamPresenceStatus, { label: string; badge: string }> 
 type Filter = 'ALL' | TeamPresenceStatus;
 type ExportPeriod = 'weekly' | 'monthly';
 
-/** Prefer server minutes for closed sessions; live-clamp only while still logged in. */
-function displayMinutes(row: TeamPresenceRow, workDate: string): number {
-  if (row.status === 'LOGGED_OUT' && (row.worked_minutes || 0) >= 0 && row.last_logout && row.first_login) {
-    const start = new Date(row.first_login).getTime();
-    const end = new Date(row.last_logout).getTime();
-    // Same-day short session: trust clock span when server rollup is overnight-inflated.
-    if (end >= start && (end - start) / 60000 <= 16 * 60) {
-      return (end - start) / 60000;
-    }
-  }
-  return liveMinutes(row, workDate);
-}
-
-/** Hours for the selected work date only — never count past local midnight into the next day. */
-function liveMinutes(row: TeamPresenceRow, workDate: string): number {
-  if (!row.first_login) return row.worked_minutes || 0;
+/** Local day window for the selected work date (ms). */
+function workDayWindow(workDate: string): { dayStart: number; dayEnd: number; dayCap: number } {
   const [y, m, d] = workDate.split('-').map(Number);
   const dayStart = new Date(y, m - 1, d).getTime();
   const dayEnd = new Date(y, m - 1, d + 1).getTime();
+  return { dayStart, dayEnd, dayCap: dayEnd - 1000 };
+}
+
+/** Logout time clipped to the work day so next-morning stamps don't show as AM. */
+function formatLogoutTime(iso: string | null | undefined, workDate: string): string {
+  if (!iso) return '—';
+  const { dayCap } = workDayWindow(workDate);
+  const t = new Date(iso).getTime();
+  const show = Number.isFinite(t) && t > dayCap ? new Date(dayCap) : new Date(iso);
+  return show.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/**
+ * Hours for the selected work date only.
+ * Always login→logout inside the day — never trust an unclamped overnight span
+ * (that made "10:19 AM → 10:31 AM" show as 13h 41m).
+ */
+function displayMinutes(row: TeamPresenceRow, workDate: string): number {
+  return liveMinutes(row, workDate);
+}
+
+function liveMinutes(row: TeamPresenceRow, workDate: string): number {
+  if (!row.first_login) return row.worked_minutes || 0;
+  const { dayStart, dayEnd } = workDayWindow(workDate);
   const start = Math.max(new Date(row.first_login).getTime(), dayStart);
 
   if (row.status === 'LOGGED_OUT' && row.last_logout) {
     const end = Math.min(new Date(row.last_logout).getTime(), dayEnd);
-    return Math.max(0, (end - start) / 60000);
+    if (end > start) return (end - start) / 60000;
+    // Server already day-clamped; prefer that when client clamp collapses.
+    if ((row.worked_minutes || 0) > 0) return row.worked_minutes;
+    return 0;
   }
   if (row.status === 'LOGGED_IN') {
     const end = Math.min(Date.now(), dayEnd);
     return Math.max(0, (end - start) / 60000);
   }
-  // Trust server when it already day-clamped overnight rollups.
   if ((row.worked_minutes || 0) > 0 && (row.worked_minutes || 0) <= 16 * 60) {
     return row.worked_minutes;
   }
@@ -304,7 +316,7 @@ export default function PresencePage() {
                       <span className="text-emerald-600">Active</span>
                     ) : (
                       <div>
-                        <div>{formatTime(r.last_logout)}</div>
+                        <div>{formatLogoutTime(r.last_logout, date)}</div>
                         {r.logout_note && (
                           <div className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 max-w-[200px] leading-snug">
                             {r.logout_note}

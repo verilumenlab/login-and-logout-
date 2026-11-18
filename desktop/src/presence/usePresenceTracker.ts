@@ -30,6 +30,8 @@ import {
   getNineHourExtensionEndsAt,
   getNineHourPromptOpenedAt,
   hasCompletedNineHours,
+  isPastSleepLogoutTime,
+  logoutNotice,
   markNineHourPromptOpened,
   shouldShowNineHourPrompt,
   syncWorkStart,
@@ -249,20 +251,51 @@ export function usePresenceTracker(
     if (!active || !device) return;
     const unsubscribe = onPowerEventQueued((event: PresenceEventIn) => {
       enqueuePresenceEvent(event);
+      if (
+        (event.event_type === 'SYSTEM_SUSPEND' || event.event_type === 'SYSTEM_SHUTDOWN') &&
+        isPastSleepLogoutTime(event.occurred_at ? new Date(event.occurred_at) : new Date()) &&
+        loggedInRef.current === true
+      ) {
+        const reason = event.event_type === 'SYSTEM_SHUTDOWN' ? 'eod_shutdown' : 'eod_sleep';
+        void (async () => {
+          await performWorkLogout(reason);
+          const msg = logoutNotice(reason);
+          noticeRef.current?.(msg);
+          void showDesktopNotification('WorkPulse — Auto logout', msg);
+          void tick();
+        })();
+        return;
+      }
       void tick();
     });
     return unsubscribe;
-  }, [active, device, tick]);
+  }, [active, device, tick, performWorkLogout]);
 
   useEffect(() => {
     if (!active || !device) return;
     const unsubscribe = onBreakAwayQueued((payload: BreakAwayPayload) => {
-      handleBreakAwaySignal(payload, device.device_id);
-      refreshBreakStatus();
-      void tick();
+      void (async () => {
+        // After 6:00 PM, system sleep = left for the day → logout (hours stop at sleep).
+        if (
+          payload.signal === 'SUSPEND' &&
+          isPastSleepLogoutTime(payload.occurred_at ? new Date(payload.occurred_at) : new Date()) &&
+          loggedInRef.current === true
+        ) {
+          await performWorkLogout('eod_sleep');
+          const msg = logoutNotice('eod_sleep');
+          noticeRef.current?.(msg);
+          void showDesktopNotification('WorkPulse — Auto logout', msg);
+          refreshBreakStatus();
+          void tick();
+          return;
+        }
+        handleBreakAwaySignal(payload, device.device_id);
+        refreshBreakStatus();
+        void tick();
+      })();
     });
     return unsubscribe;
-  }, [active, device, tick, refreshBreakStatus]);
+  }, [active, device, tick, refreshBreakStatus, performWorkLogout]);
 
   useEffect(() => {
     if (!active || !device) {

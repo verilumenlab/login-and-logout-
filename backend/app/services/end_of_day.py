@@ -71,6 +71,8 @@ async def _clock_out_eod(
     db: AsyncSession,
     day: AttendanceDay,
     close_at: datetime,
+    *,
+    notes: str = "Auto-logout at 6:30 PM — laptop idle / not in use",
 ) -> None:
     db.add(
         AttendanceEvent(
@@ -78,9 +80,9 @@ async def _clock_out_eod(
             event_type=AttendanceEventType.CLOCK_OUT,
             timestamp=close_at,
             source=AttendanceSource.DESKTOP,
-            client_event_id=f"presence:eod-idle:{day.id}"[:100],
+            client_event_id=f"presence:eod-idle:{day.id}:{int(close_at.timestamp())}"[:100],
             sync_delay_seconds=round(max(0.0, (datetime.now(UTC) - close_at).total_seconds()), 2),
-            notes="Auto-logout at 6:30 PM — laptop idle / not in use",
+            notes=notes,
         )
     )
     await db.flush()
@@ -142,11 +144,31 @@ async def run_end_of_day_idle_logout(
         # Idle/lock/sleep break = not using the laptop. Active sessions stay open
         # (desktop app also auto-logs out after 5 min idle past 6:30).
         if idle_break:
-            close_at = cutoff if last_in <= cutoff else last_in
-            await _clock_out_eod(db, day, close_at)
+            # Prefer open AUTO_SLEEP/LOCK/IDLE start time so hours stop when the laptop
+            # actually went idle/sleep — not always at the 6:30 cutoff.
+            break_start = None
+            for br in day.breaks or []:
+                if br.end_time is None and (br.source or "") in IDLE_BREAK_SOURCES:
+                    bs = ensure_utc(br.start_time)
+                    if bs is not None and (break_start is None or bs < break_start):
+                        break_start = bs
+            if break_start is not None and break_start >= last_in:
+                close_at = break_start
+            else:
+                close_at = cutoff if last_in <= cutoff else last_in
+            reason = "sleep_break" if any(
+                (br.end_time is None and (br.source or "") in {BreakSource.AUTO_SLEEP.value, "AUTO_SLEEP"})
+                for br in (day.breaks or [])
+            ) else "idle_break"
+            notes = (
+                "Auto-logout — laptop system sleep after 6:00 PM"
+                if reason == "sleep_break"
+                else "Auto-logout at 6:30 PM — laptop idle / not in use"
+            )
+            await _clock_out_eod(db, day, close_at, notes=notes)
             meta = dict(day.metadata_json or {})
             meta["eod_auto_logout_at"] = close_at.isoformat()
-            meta["eod_auto_logout_reason"] = "idle_break"
+            meta["eod_auto_logout_reason"] = reason
             day.metadata_json = meta
             closed.append(
                 {
@@ -154,10 +176,10 @@ async def run_end_of_day_idle_logout(
                     "employee_code": emp_code,
                     "full_name": emp_name,
                     "closed_at": close_at.isoformat(),
-                    "reason": "idle_break",
+                    "reason": reason,
                 }
             )
-            logger.info("EOD idle logout: %s (%s) at %s", emp_name, emp_code, close_at.isoformat())
+            logger.info("EOD idle logout: %s (%s) at %s (%s)", emp_name, emp_code, close_at.isoformat(), reason)
         else:
             meta = dict(day.metadata_json or {})
             meta["eod_still_active_at"] = now.isoformat()

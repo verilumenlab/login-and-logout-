@@ -18,17 +18,37 @@ from app.middleware.security_headers import SecurityHeadersMiddleware
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Keep org leave policy and trusted office Wi-Fi SSIDs in sync.
     try:
+        from datetime import UTC, datetime, timedelta
+
         from sqlalchemy import select
 
         from app.core.database import AsyncSessionLocal
         from app.core.seeds import seed_organization_leave_types, seed_organization_office_wifi
+        from app.models.employee import EmployeeProfile, EmploymentStatus
         from app.models.organization import Organization
+        from app.services.attendance_engine import local_work_date
+        from app.services.presence_service import repair_evening_sleep_logouts
 
         async with AsyncSessionLocal() as db:
             orgs = (await db.execute(select(Organization))).scalars().all()
+            today = local_work_date(datetime.now(UTC))
             for org in orgs:
                 await seed_organization_leave_types(db, org.id)
                 await seed_organization_office_wifi(db, org.id)
+                # Correct last two days: evening system sleep/shutdown → logout + hours.
+                emp_ids = list(
+                    (
+                        await db.execute(
+                            select(EmployeeProfile.id).where(
+                                EmployeeProfile.organization_id == org.id,
+                                EmployeeProfile.employment_status != EmploymentStatus.TERMINATED,
+                            )
+                        )
+                    ).scalars().all()
+                )
+                if emp_ids:
+                    await repair_evening_sleep_logouts(db, emp_ids, today)
+                    await repair_evening_sleep_logouts(db, emp_ids, today - timedelta(days=1))
             await db.commit()
     except Exception:
         # Never block API startup if policy sync fails (e.g. migrations pending).
