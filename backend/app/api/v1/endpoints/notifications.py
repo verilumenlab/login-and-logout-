@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated, Any, Sequence
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -309,6 +309,156 @@ async def trigger_process_queue(
         "dispatched_count": dispatched,
         "processed_at": datetime.now(UTC).isoformat(),
     }
+
+
+class MissingLoginAlertResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    employee_id: uuid.UUID
+    work_date: date
+    employee_name: str
+    employee_email: str
+    employee_code: str
+    department_name: str | None = None
+    scheduled_shift: str | None = None
+    status: str
+    reviewed_by_user_id: uuid.UUID | None = None
+    reviewed_at: datetime | None = None
+    review_note: str | None = None
+    emails_sent_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _status_to_str(cls, value: Any) -> str:
+        return value.value if hasattr(value, "value") else str(value)
+
+
+class MissingLoginReviewRequest(BaseModel):
+    note: str | None = None
+
+
+@router.post("/missing-login-alert")
+async def trigger_missing_login_alert(
+    current_user: User = Depends(
+        require_role(["Admin", "Administrator", "Super Admin", "HR", "HR Manager"])
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """
+    Scan today after 10:30 IST and queue PENDING missing-login alerts.
+    Does not send mail until Admin/HR approves each alert.
+    """
+    from app.services.missing_login_alert import run_missing_login_alerts
+
+    result = await run_missing_login_alerts(
+        db,
+        now=datetime.now(UTC),
+        organization_id=current_user.organization_id,
+    )
+    return result
+
+
+@router.get("/missing-login-alerts", response_model=list[MissingLoginAlertResponse])
+async def get_missing_login_alerts(
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=100, ge=1, le=300),
+    current_user: User = Depends(
+        require_role(["Admin", "Administrator", "Super Admin", "HR", "HR Manager"])
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> list[MissingLoginAlertResponse]:
+    """List missing-login alerts awaiting (or after) admin approval."""
+    from app.models.missing_login import MissingLoginAlertStatus
+    from app.services.missing_login_alert import list_missing_login_alerts
+
+    status_enum = None
+    if status_filter:
+        try:
+            status_enum = MissingLoginAlertStatus(status_filter.upper())
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="status must be PENDING, APPROVED, REJECTED, or SENT",
+            ) from exc
+
+    rows = await list_missing_login_alerts(
+        db,
+        current_user.organization_id,
+        status=status_enum,
+        limit=limit,
+    )
+    return [MissingLoginAlertResponse.model_validate(r) for r in rows]
+
+
+@router.post("/missing-login-alerts/{alert_id}/approve", response_model=MissingLoginAlertResponse)
+async def approve_missing_login(
+    alert_id: uuid.UUID,
+    payload: MissingLoginReviewRequest | None = None,
+    current_user: User = Depends(
+        require_role(["Admin", "Administrator", "Super Admin", "HR", "HR Manager"])
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> MissingLoginAlertResponse:
+    """Admin/HR approves — sends mail to employee, manager, HR, and admin."""
+    from app.services.missing_login_alert import approve_missing_login_alert
+
+    try:
+        alert = await approve_missing_login_alert(
+            db,
+            alert_id,
+            reviewer=current_user,
+            note=(payload.note if payload else None),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return MissingLoginAlertResponse.model_validate(alert)
+
+
+@router.post("/missing-login-alerts/{alert_id}/reject", response_model=MissingLoginAlertResponse)
+async def reject_missing_login(
+    alert_id: uuid.UUID,
+    payload: MissingLoginReviewRequest | None = None,
+    current_user: User = Depends(
+        require_role(["Admin", "Administrator", "Super Admin", "HR", "HR Manager"])
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> MissingLoginAlertResponse:
+    """Admin/HR rejects — mail is not sent."""
+    from app.services.missing_login_alert import reject_missing_login_alert
+
+    try:
+        alert = await reject_missing_login_alert(
+            db,
+            alert_id,
+            reviewer=current_user,
+            note=(payload.note if payload else None),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return MissingLoginAlertResponse.model_validate(alert)
+
+
+
+@router.post("/missing-login-alerts/approve-all")
+async def approve_all_missing_login(
+    payload: MissingLoginReviewRequest | None = None,
+    current_user: User = Depends(
+        require_role(["Admin", "Administrator", "Super Admin", "HR", "HR Manager"])
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Approve and send all PENDING missing-login alerts for the organization."""
+    from app.services.missing_login_alert import approve_all_pending_missing_login_alerts
+
+    _ = payload  # note unused for bulk; per-row notes not applied
+    return await approve_all_pending_missing_login_alerts(db, reviewer=current_user)
+
 
 
 @router.post("/webhook/delivery")

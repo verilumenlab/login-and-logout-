@@ -18,6 +18,8 @@ SLEEP_LOGOUT_AFTER = time(18, 0)
 
 # Login after 09:30 is fine until 10:30 (still records actual login time).
 LATE_LOGIN_GRACE_MINUTES = 60
+# After this local time with no login, notify employee + HR + manager + admin.
+MISSING_LOGIN_ALERT = time(10, 30)
 
 EXPECTED_WORK_MINUTES = 9 * 60
 EARLY_LOGOUT_THRESHOLD_MINUTES = 7 * 60  # “early” band starts around 7h

@@ -49,6 +49,11 @@ celery_app.conf.beat_schedule = {
         "task": "tasks.attendance.eod_idle_logout",
         "schedule": crontab(minute="*/10"),
     },
+    # 10:30 IST no-login alert — no-ops until local 10:30, then emails employee/HR/manager/admin.
+    "missing-login-alert": {
+        "task": "tasks.attendance.missing_login_alert",
+        "schedule": crontab(minute="*/10"),
+    },
 }
 
 # Autodiscover tasks

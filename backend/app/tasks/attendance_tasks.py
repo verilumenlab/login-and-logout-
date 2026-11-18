@@ -50,3 +50,28 @@ def eod_idle_logout() -> dict[str, Any]:
 def generate_daily_attendance_summary(date_str: str) -> dict:
     """Calculates daily attendance stats for managers."""
     return {"status": "success", "date": date_str, "processed_employees": 0}
+
+
+@celery_app.task(name="tasks.attendance.missing_login_alert")
+def missing_login_alert() -> dict[str, Any]:
+    """
+    Every ~10 minutes: after 10:30 IST, queue PENDING missing-login alerts
+    for Admin/HR approval. Emails are not sent until approved.
+    """
+    from app.services.missing_login_alert import run_missing_login_alerts
+
+    async def _execute():
+        async with AsyncSessionLocal() as db:
+            return await run_missing_login_alerts(db)
+
+    try:
+        result = run_async(_execute())
+        logger.info(
+            "Missing login queue: status=%s queued=%s",
+            result.get("status"),
+            result.get("queued_count", 0),
+        )
+        return result
+    except Exception:
+        logger.exception("Missing login queue failed")
+        raise

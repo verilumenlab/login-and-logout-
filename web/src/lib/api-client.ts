@@ -436,6 +436,25 @@ export interface EmailOutbox {
   created_at: string;
 }
 
+export interface MissingLoginAlert {
+  id: string;
+  organization_id: string;
+  employee_id: string;
+  work_date: string;
+  employee_name: string;
+  employee_email: string;
+  employee_code: string;
+  department_name?: string | null;
+  scheduled_shift?: string | null;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'SENT';
+  reviewed_by_user_id?: string | null;
+  reviewed_at?: string | null;
+  review_note?: string | null;
+  emails_sent_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
 // ==========================================
 // ApiClient Class
 // ==========================================
@@ -1278,6 +1297,46 @@ export class ApiClient {
     return this.request<{ message: string; id: string }>(`/notifications/outbox/${id}`, {
       method: 'DELETE',
     });
+  }
+
+  async scanMissingLoginAlerts(): Promise<{
+    status: string;
+    work_date?: string;
+    queued_count?: number;
+    queued_employees?: Array<{ employee_name: string; employee_email: string; status: string }>;
+    note?: string;
+    reason?: string;
+  }> {
+    return this.request('/notifications/missing-login-alert', { method: 'POST' });
+  }
+
+  async listMissingLoginAlerts(status?: string, limit: number = 100): Promise<MissingLoginAlert[]> {
+    const q = new URLSearchParams({ limit: String(limit) });
+    if (status) q.set('status', status);
+    return this.request<MissingLoginAlert[]>(`/notifications/missing-login-alerts?${q}`);
+  }
+
+  async approveMissingLoginAlert(id: string, note?: string): Promise<MissingLoginAlert> {
+    return this.request<MissingLoginAlert>(`/notifications/missing-login-alerts/${id}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ note: note || null }),
+    });
+  }
+
+  async rejectMissingLoginAlert(id: string, note?: string): Promise<MissingLoginAlert> {
+    return this.request<MissingLoginAlert>(`/notifications/missing-login-alerts/${id}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ note: note || null }),
+    });
+  }
+
+  async approveAllMissingLoginAlerts(): Promise<{
+    status: string;
+    approved_count: number;
+    approved_ids: string[];
+    errors: string[];
+  }> {
+    return this.request('/notifications/missing-login-alerts/approve-all', { method: 'POST' });
   }
 
   // --- Report Schedules (Phase 13) ---

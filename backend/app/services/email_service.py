@@ -1529,3 +1529,50 @@ class EmailService:
         )
         await cls.dispatch_outbox_message(db, outbox.id)
         return outbox
+
+
+    @classmethod
+    async def notify_missing_login(
+        cls,
+        db: AsyncSession,
+        organization_id: uuid.UUID,
+        recipient_email: str,
+        recipient_name: str,
+        employee_name: str,
+        employee_email: str,
+        employee_code: str,
+        work_date: str,
+        scheduled_shift: str,
+        department_name: str,
+        grace_minutes: int = 60,
+        alert_time: str = "10:30",
+        audience: str = "hr_admin",
+    ) -> EmailOutbox:
+        """
+        Notifies that an employee has not logged in after the grace cutoff (10:30).
+        Sent to the employee, manager(s), HR, and admin — includes name and email.
+        """
+        idempotency_key = (
+            f"missing_login_{employee_code}_{work_date}_{recipient_email.strip().lower()}_{audience}"
+        )
+        outbox = await cls.enqueue_email(
+            db=db,
+            organization_id=organization_id,
+            template_key="attendance_missing_alert",
+            recipient_email=recipient_email,
+            recipient_name=recipient_name,
+            context={
+                "recipient_name": recipient_name,
+                "employee_name": employee_name,
+                "employee_email": employee_email,
+                "employee_code": employee_code,
+                "work_date": work_date,
+                "scheduled_shift": scheduled_shift,
+                "department_name": department_name,
+                "grace_minutes": grace_minutes,
+                "alert_time": alert_time,
+            },
+            idempotency_key=idempotency_key,
+        )
+        await cls.dispatch_outbox_message(db, outbox.id)
+        return outbox

@@ -51,6 +51,7 @@ from app.models.leave import (
     LeaveStatus,
     LeaveType,
 )
+from app.models.missing_login import MissingLoginAlert, MissingLoginAlertStatus
 from app.models.notification import (
     DeliveryEventType,
     EmailDeliveryLog,
@@ -183,6 +184,9 @@ __all__ = [
     # 32. Email delivery logs
     "EmailDeliveryLog",
     "DeliveryEventType",
+    # 32b. Missing login alerts (admin approval before send)
+    "MissingLoginAlert",
+    "MissingLoginAlertStatus",
     # 33. Audit logs
     "AuditLog",
     # 34. Refresh tokens
