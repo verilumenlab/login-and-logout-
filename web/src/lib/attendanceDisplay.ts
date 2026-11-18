@@ -60,10 +60,18 @@ export function correctedHistoryDay(day: PresenceDay): {
   last_logout: string | null | undefined;
   worked_minutes: number;
   powerOffEvent: PresenceEvent | null;
+  logout_reason: string | null;
+  logout_note: string | null;
 } {
   const powerOffEvent = inferLogoutEvent(day.events || [], day.work_date);
   if (!day.first_login) {
-    return { last_logout: day.last_logout, worked_minutes: 0, powerOffEvent };
+    return {
+      last_logout: day.last_logout,
+      worked_minutes: 0,
+      powerOffEvent,
+      logout_reason: day.logout_reason || null,
+      logout_note: day.logout_note || null,
+    };
   }
 
   const start = new Date(day.first_login).getTime();
@@ -71,20 +79,44 @@ export function correctedHistoryDay(day: PresenceDay): {
 
   if (day.is_logged_in && !powerOffEvent) {
     const mins = Math.max(0, (Math.min(Date.now(), endCap) - start) / 60000);
-    return { last_logout: day.last_logout, worked_minutes: mins, powerOffEvent };
+    return {
+      last_logout: day.last_logout,
+      worked_minutes: mins,
+      powerOffEvent,
+      logout_reason: day.logout_reason || null,
+      logout_note: day.logout_note || null,
+    };
   }
 
   const endIso = powerOffEvent?.occurred_at || day.last_logout || null;
   if (!endIso) {
-    return { last_logout: day.last_logout, worked_minutes: day.worked_minutes || 0, powerOffEvent };
+    return {
+      last_logout: day.last_logout,
+      worked_minutes: day.worked_minutes || 0,
+      powerOffEvent,
+      logout_reason: day.logout_reason || null,
+      logout_note: day.logout_note || null,
+    };
   }
 
   const end = Math.min(new Date(endIso).getTime(), endCap);
   const mins = Math.max(0, (end - start) / 60000);
+  const reasonFromEvent =
+    powerOffEvent?.event_type === 'WIFI_DISCONNECTED'
+      ? 'office_wifi'
+      : powerOffEvent?.event_type === 'SYSTEM_SUSPEND'
+        ? 'sleep'
+        : powerOffEvent?.event_type === 'SYSTEM_SHUTDOWN'
+          ? 'shutdown'
+          : powerOffEvent?.event_type === 'APP_LOGOUT'
+            ? 'app_logout'
+            : null;
   return {
     last_logout: powerOffEvent?.occurred_at || day.last_logout,
     worked_minutes: mins,
     powerOffEvent,
+    logout_reason: day.logout_reason || reasonFromEvent,
+    logout_note: day.logout_note || null,
   };
 }
 

@@ -1,10 +1,23 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { ChevronDown, ChevronLeft, ChevronRight, Download, LogIn, RefreshCw, Search, Wifi } from 'lucide-react';
 import { apiClient, TeamPresenceResponse, TeamPresenceRow, TeamPresenceStatus } from '@/lib/api-client';
 import { useRole } from '@/components/RoleContext';
 import { formatDuration, formatTime, localDateInput, shiftDate } from '@/lib/format';
+
+function logoutReasonLabel(reason?: string | null): string | null {
+  if (!reason) return null;
+  const map: Record<string, string> = {
+    office_wifi: 'Office Wi-Fi disconnect',
+    sleep: 'System sleep after 6:00 PM',
+    shutdown: 'System shutdown',
+    app_logout: 'App logout',
+    eod_no_office_wifi: 'Not on office Wi-Fi after 6:30 PM',
+  };
+  return map[reason] || reason;
+}
 
 const STATUS_META: Record<TeamPresenceStatus, { label: string; badge: string }> = {
   LOGGED_IN: {
@@ -252,6 +265,14 @@ export default function PresencePage() {
         </div>
       )}
 
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 px-4 py-3 text-[11px] text-slate-600 dark:text-slate-300 space-y-1">
+        <div className="font-semibold text-slate-800 dark:text-slate-100">Hours rules shown on this board</div>
+        <div>1. Office Wi‑Fi disconnect → logout at that time (hours stop)</div>
+        <div>2. After 6:00 PM system sleep / shutdown → logout</div>
+        <div>3. No office Wi‑Fi after 6:00 but day stuck late → logout 6:30 PM</div>
+        <div>4. Breaks are listed separately and are not subtracted from hours</div>
+      </div>
+
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
         <div className="p-3 border-b border-slate-200 dark:border-slate-800">
           <div className="relative max-w-sm">
@@ -273,20 +294,22 @@ export default function PresencePage() {
                 <th className="text-left font-bold px-4 py-3">Login</th>
                 <th className="text-left font-bold px-4 py-3">Logout</th>
                 <th className="text-right font-bold px-4 py-3">Hours</th>
+                <th className="text-right font-bold px-4 py-3">Breaks</th>
                 <th className="text-left font-bold px-4 py-3">Wi-Fi</th>
+                <th className="text-left font-bold px-4 py-3">Details</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {loading && !data && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-slate-400">
+                  <td colSpan={8} className="px-4 py-10 text-center text-slate-400">
                     Loading…
                   </td>
                 </tr>
               )}
               {data && rows.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-slate-400">
+                  <td colSpan={8} className="px-4 py-10 text-center text-slate-400">
                     {data.rows.length === 0
                       ? data.scope === 'TEAM'
                         ? 'No employees report to you yet.'
@@ -296,7 +319,7 @@ export default function PresencePage() {
                 </tr>
               )}
               {rows.map((r) => (
-                <tr key={r.employee_id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                <tr key={r.employee_id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 align-top">
                   <td className="px-4 py-3">
                     <div className="font-semibold text-slate-900 dark:text-slate-100">{r.full_name}</div>
                     <div className="text-[10px] text-slate-500 font-mono">
@@ -316,10 +339,10 @@ export default function PresencePage() {
                       <span className="text-emerald-600">Active</span>
                     ) : (
                       <div>
-                        <div>{formatLogoutTime(r.last_logout, date)}</div>
-                        {r.logout_note && (
-                          <div className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 max-w-[200px] leading-snug">
-                            {r.logout_note}
+                        <div className="font-semibold">{formatLogoutTime(r.last_logout, date)}</div>
+                        {(logoutReasonLabel(r.logout_reason) || r.logout_note) && (
+                          <div className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 max-w-[220px] leading-snug">
+                            {logoutReasonLabel(r.logout_reason) || r.logout_note}
                           </div>
                         )}
                       </div>
@@ -328,7 +351,7 @@ export default function PresencePage() {
                   <td className="px-4 py-3 text-right tabular-nums">
                     {r.first_login ? (
                       <div>
-                        <div>{formatDuration(displayMinutes(r, date))}</div>
+                        <div className="font-semibold">{formatDuration(displayMinutes(r, date))}</div>
                         <div className="text-[10px] text-slate-500 mt-0.5 space-y-0.5">
                           {r.completed_nine_hours && <div className="text-emerald-600">9h completed</div>}
                           {r.early_logout && <div className="text-amber-600">Early logout</div>}
@@ -342,16 +365,29 @@ export default function PresencePage() {
                       '—'
                     )}
                   </td>
+                  <td className="px-4 py-3 text-right tabular-nums text-slate-600 dark:text-slate-300">
+                    {(r.break_count || 0) > 0
+                      ? `${r.break_count} · ${formatDuration(r.total_break_minutes || 0)}`
+                      : '—'}
+                  </td>
                   <td className="px-4 py-3">
                     {r.first_wifi_connected_at ? (
                       <div className="flex items-center gap-1.5">
-                        <Wifi className="w-3.5 h-3.5 text-emerald-600" />
+                        <Wifi className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                         <span className="tabular-nums">{formatTime(r.first_wifi_connected_at)}</span>
                         <span className="text-slate-500 truncate max-w-[140px]">{r.wifi_networks.join(', ')}</span>
                       </div>
                     ) : (
                       <span className="text-slate-400">—</span>
                     )}
+                  </td>
+                  <td className="px-4 py-3">
+                    <Link
+                      href={`/attendance?employee=${r.employee_id}`}
+                      className="text-[11px] font-semibold text-blue-700 dark:text-blue-300 hover:underline"
+                    >
+                      Full history
+                    </Link>
                   </td>
                 </tr>
               ))}

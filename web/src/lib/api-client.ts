@@ -493,6 +493,9 @@ export interface TeamPresenceRow {
   last_signal_at: string | null;
   leave_type_name: string | null;
   logout_note?: string | null;
+  logout_reason?: string | null;
+  break_count?: number;
+  total_break_minutes?: number;
   workday_status?: string | null;
   confirmation_status?: string | null;
   completed_nine_hours?: boolean;
@@ -535,6 +538,8 @@ export interface PresenceDay {
   first_wifi_connected_at: string | null;
   wifi_networks: string[];
   events: PresenceEvent[];
+  logout_note?: string | null;
+  logout_reason?: string | null;
 }
 
 export interface PresenceHistory {

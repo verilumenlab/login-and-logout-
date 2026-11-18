@@ -63,6 +63,9 @@ class PresenceDay(BaseModel):
     first_wifi_connected_at: datetime | None = None
     wifi_networks: list[str] = Field(default_factory=list)
     events: list[PresenceEventOut] = Field(default_factory=list)
+    # Why hours stopped (office Wi-Fi leave, sleep, shutdown, etc.)
+    logout_note: str | None = None
+    logout_reason: str | None = None  # office_wifi | sleep | shutdown | eod_no_office_wifi | …
 
 
 class PresenceHistoryResponse(BaseModel):
@@ -98,6 +101,9 @@ class TeamPresenceRow(BaseModel):
     leave_type_name: str | None = None
     # Last clock-out note (human-readable).
     logout_note: str | None = None
+    logout_reason: str | None = None  # office_wifi | sleep | shutdown | eod_no_office_wifi | …
+    break_count: int = 0
+    total_break_minutes: int = 0
     # Structured workday outcome from office policy.
     workday_status: str | None = None  # EARLY_LOGOUT | COMPLETED_9H | AUTO_LOGOUT | …
     confirmation_status: str | None = None  # CONFIRMED | NO_RESPONSE | EXTENSION_ENDED | EOD_IDLE | …

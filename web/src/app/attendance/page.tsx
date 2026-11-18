@@ -6,6 +6,18 @@ import { apiClient, PresenceDay, PresenceEvent, TeamPresenceRow } from '@/lib/ap
 import { correctedHistoryDay, isPowerOffCountedAsLogout } from '@/lib/attendanceDisplay';
 import { formatDuration, formatTime, localDateInput, shiftDate } from '@/lib/format';
 
+function logoutReasonLabel(reason?: string | null): string | null {
+  if (!reason) return null;
+  const map: Record<string, string> = {
+    office_wifi: 'Office Wi-Fi disconnect',
+    sleep: 'System sleep after 6:00 PM',
+    shutdown: 'System shutdown',
+    app_logout: 'App logout',
+    eod_no_office_wifi: 'Not on office Wi-Fi after 6:30 PM',
+  };
+  return map[reason] || reason;
+}
+
 type RangeId = 'week' | 'two_weeks' | 'month' | 'custom';
 
 const EVENT_LABELS: Record<string, string> = {
@@ -53,6 +65,13 @@ export default function AttendancePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Default period = last 3 days so 16/17/18 show with full detail.
+  useEffect(() => {
+    const endDay = localDateInput(new Date());
+    setRange('custom');
+    setDates([shiftDate(endDay, -2), endDay]);
+  }, []);
+
   useEffect(() => {
     apiClient
       .getTeamPresence()
@@ -69,7 +88,11 @@ export default function AttendancePage() {
     if (!employeeId) return;
     setLoading(true);
     try {
-      setDays((await apiClient.getEmployeePresenceHistory(employeeId, start, end)).days);
+      const loaded = (await apiClient.getEmployeePresenceHistory(employeeId, start, end)).days;
+      setDays(loaded);
+      // Auto-expand the newest day that has a login so event detail is visible.
+      const newest = loaded.find((d) => d.first_login);
+      setExpanded(newest?.work_date ?? loaded[0]?.work_date ?? null);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load attendance');
@@ -111,7 +134,7 @@ export default function AttendancePage() {
             <Clock className="w-5 h-5 text-emerald-600" /> Attendance history
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Day-by-day login, logout and Wi-Fi activity for one employee.
+            Login, logout reason, office Wi‑Fi disconnect, sleep/shutdown, breaks and hours for each day.
           </p>
         </div>
         <button
@@ -194,6 +217,12 @@ export default function AttendancePage() {
         </div>
       )}
 
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 px-4 py-3 text-[11px] text-slate-600 dark:text-slate-300 space-y-1">
+        <div className="font-semibold text-slate-800 dark:text-slate-100">How logout & hours are decided</div>
+        <div>Office Wi‑Fi disconnect → logout at that time · Sleep/shutdown after 6:00 PM → logout · Breaks shown separately (not removed from hours)</div>
+        <div>Click a day row to open the full timeline (login, Wi‑Fi, sleep, shutdown, breaks).</div>
+      </div>
+
       {selected && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
           {[
@@ -258,10 +287,17 @@ export default function AttendancePage() {
                       {showActive ? (
                         <span className="text-emerald-600 font-semibold">Active</span>
                       ) : (
-                        formatTime(corrected.last_logout)
+                        <div>
+                          <div className="font-semibold">{formatTime(corrected.last_logout)}</div>
+                          {(logoutReasonLabel(corrected.logout_reason) || corrected.logout_note) && (
+                            <div className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 max-w-[220px] leading-snug">
+                              {logoutReasonLabel(corrected.logout_reason) || corrected.logout_note}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
+                    <td className="px-4 py-3 text-right tabular-nums font-semibold">
                       {d.first_login ? formatDuration(corrected.worked_minutes) : '—'}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">

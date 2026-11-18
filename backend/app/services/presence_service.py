@@ -1213,10 +1213,18 @@ async def get_presence_days(
         if att is not None and att.shift_start is not None:
             att = await _autoclose_stale_open_day(db, att, now=now)
             office_ssids = await _office_ssids(db, employee.organization_id)
-            leave_at, _leave_reason = _infer_effective_logout(
+            leave_at, leave_reason = _infer_effective_logout(
                 day_events, work_date=work_date, office_ssids=office_ssids
             )
             logout_for_hours = ensure_utc(att.shift_end)
+            if leave_at is None:
+                leave_at, leave_reason = _fallback_eod_without_office_wifi(
+                    day_events,
+                    work_date=work_date,
+                    office_ssids=office_ssids,
+                    shift_end=logout_for_hours,
+                    day_end=local_day_bounds(work_date)[1],
+                )
             if leave_at is not None and (
                 logout_for_hours is None or logout_for_hours > leave_at + timedelta(minutes=2)
             ):
@@ -1247,6 +1255,14 @@ async def get_presence_days(
                 row.first_login = start
                 row.last_logout = end
                 row.worked_minutes = mins
+                if leave_reason:
+                    row.logout_reason = leave_reason
+                    row.logout_note = _logout_note_for_reason(leave_reason)
+                else:
+                    note = _last_clock_out_note(att)
+                    if note and " — " in note:
+                        note = note.split(" — ", 1)[1]
+                    row.logout_note = note
         elif att is not None:
             row.status = att.status.value if hasattr(att.status, "value") else str(att.status)
         rows.append(row)
@@ -1303,7 +1319,7 @@ async def get_team_presence(
     att_days = (
         await db.execute(
             select(AttendanceDay)
-            .options(selectinload(AttendanceDay.events))
+            .options(selectinload(AttendanceDay.events), selectinload(AttendanceDay.breaks))
             .where(AttendanceDay.employee_id.in_(ids), AttendanceDay.work_date == work_date)
         )
     ).scalars().all()
@@ -1386,12 +1402,12 @@ async def get_team_presence(
                 if refreshed is not None:
                     att = refreshed
             att_by_emp[emp.id] = att
-            leave_at, _leave_reason = _infer_effective_logout(
+            leave_at, leave_reason = _infer_effective_logout(
                 emp_signals, work_date=work_date, office_ssids=office_ssids
             )
             logout_for_hours = ensure_utc(att.shift_end)
             if leave_at is None:
-                leave_at, _leave_reason = _fallback_eod_without_office_wifi(
+                leave_at, leave_reason = _fallback_eod_without_office_wifi(
                     emp_signals,
                     work_date=work_date,
                     office_ssids=office_ssids,
@@ -1402,6 +1418,9 @@ async def get_team_presence(
                 logout_for_hours is None or logout_for_hours > leave_at + timedelta(minutes=2)
             ):
                 logout_for_hours = leave_at
+
+            row.break_count = len(att.breaks or []) if getattr(att, "breaks", None) is not None else 0
+            row.total_break_minutes = int(att.total_break_minutes or 0)
 
             ordered = sorted(att.events or [], key=lambda e: ensure_utc(e.timestamp) or now)
             still_open = bool(ordered) and is_clock_in(ordered[-1].event_type) and leave_at is None
@@ -1429,17 +1448,22 @@ async def get_team_presence(
                 row.last_logout = end
                 row.worked_minutes = mins
                 flags = _workday_fields_from_day(att)
-                note = flags.get("logout_note")
-                if isinstance(note, str) and " — " in note:
-                    note = note.split(" — ", 1)[1]
-                row.logout_note = note if isinstance(note, str) else None
+                if leave_reason:
+                    row.logout_reason = leave_reason
+                    row.logout_note = _logout_note_for_reason(leave_reason)
+                    row.auto_logout = True
+                else:
+                    note = flags.get("logout_note")
+                    if isinstance(note, str) and " — " in note:
+                        note = note.split(" — ", 1)[1]
+                    row.logout_note = note if isinstance(note, str) else None
+                    row.auto_logout = bool(flags.get("auto_logout"))
                 row.workday_status = flags.get("workday_status") if isinstance(flags.get("workday_status"), str) else None
                 row.confirmation_status = (
                     flags.get("confirmation_status") if isinstance(flags.get("confirmation_status"), str) else None
                 )
                 row.completed_nine_hours = bool(flags.get("completed_nine_hours"))
                 row.early_logout = bool(flags.get("early_logout"))
-                row.auto_logout = bool(flags.get("auto_logout"))
 
         leave = leave_by_emp.get(emp.id)
         if leave is not None:
