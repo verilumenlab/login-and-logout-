@@ -88,6 +88,11 @@ export default function AttendancePage() {
     if (!employeeId) return;
     setLoading(true);
     try {
+      try {
+        await apiClient.repairAttendanceHistory(3);
+      } catch {
+        // History still loads if caller cannot run org-wide repair.
+      }
       const loaded = (await apiClient.getEmployeePresenceHistory(employeeId, start, end)).days;
       setDays(loaded);
       // Auto-expand the newest day that has a login so event detail is visible.

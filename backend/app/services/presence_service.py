@@ -986,16 +986,19 @@ async def repair_evening_sleep_logouts(
     work_date: date,
 ) -> list[dict]:
     """
-    Fix a work day for all employees using logout rules:
-    - after 6:00 PM system sleep / shutdown → logout
-    - office Wi-Fi disconnect (no later office return) → logout
-    Then recalculate hours so time after that logout is not counted.
+    Backend source of truth for Login & Logout + Attendance history.
+
+    Reads each person's presence timeline for the day, decides correct logout from:
+    - office Wi-Fi disconnect
+    - system sleep after 6:00 PM / system shutdown
+    - fallback 6:30 PM when no office Wi-Fi after 6:00 but day ran to midnight
+
+    Writes CLOCK_OUT, recalculates hours, persists shift_end + total_work_minutes.
     """
     if not employee_ids:
         return []
     day_start, day_end = local_day_bounds(work_date)
 
-    # Need org office SSIDs — load from first employee's organization.
     first_emp = await db.get(EmployeeProfile, employee_ids[0])
     office_ssids: set[str] = set()
     if first_emp is not None:
@@ -1052,41 +1055,51 @@ async def repair_evening_sleep_logouts(
         if leave_at is None or reason is None:
             continue
 
-        needs = still_open or shift_end is None or shift_end >= day_end or (
-            shift_end is not None and shift_end > leave_at + timedelta(minutes=20)
-        )
-        if not needs:
-            continue
-
         close_at = _logout_timestamp_for_day(
             work_date,
             leave_at,
             not_before=ensure_utc(day.shift_start),
         )
+        # Persist whenever stored logout is missing, still open, at day-end, or later than rule.
+        needs = still_open or shift_end is None or shift_end >= day_end - timedelta(minutes=1) or (
+            shift_end is not None and shift_end > close_at + timedelta(minutes=2)
+        )
+        # Also fix when hours are inflated vs login→rule logout.
+        if not needs and day.shift_start is not None:
+            expected = max(0, int((close_at - (ensure_utc(day.shift_start) or close_at)).total_seconds() // 60))
+            if (day.total_work_minutes or 0) > expected + 15:
+                needs = True
+        if not needs:
+            continue
+
         note = _logout_note_for_reason(reason)
-        existing = False
+        has_matching_out = False
         for e in ordered:
             et = str(getattr(e.event_type, "value", e.event_type)).upper()
             ts = ensure_utc(e.timestamp)
             if "CLOCK_OUT" not in et or ts is None:
                 continue
-            if abs((ts - close_at).total_seconds()) < 90:
-                existing = True
+            if abs((ts - close_at).total_seconds()) < 90 and (
+                reason.replace("_", " ") in (e.notes or "").lower()
+                or "office wi-fi" in (e.notes or "").lower()
+                or "system sleep" in (e.notes or "").lower()
+                or "shut down" in (e.notes or "").lower()
+                or "not on office" in (e.notes or "").lower()
+                or "rule-logout" in (e.client_event_id or "")
+            ):
+                has_matching_out = True
                 break
-        if existing:
-            # Still recalculate if stored hours look overnight-inflated.
-            if (day.total_work_minutes or 0) > 12 * 60 or (shift_end is not None and shift_end >= day_end):
-                await recalculate_attendance_day(db, day.id)
-            continue
 
-        await _add_attendance_event(
-            db,
-            day,
-            AttendanceEventType.CLOCK_OUT,
-            close_at,
-            f"presence:rule-logout:{day.id}:{int(close_at.timestamp())}"[:100],
-            note,
-        )
+        if not has_matching_out:
+            await _add_attendance_event(
+                db,
+                day,
+                AttendanceEventType.CLOCK_OUT,
+                close_at,
+                f"presence:rule-logout:{day.id}:{int(close_at.timestamp())}"[:100],
+                note,
+            )
+
         status_key = {
             "shutdown": "EOD_SHUTDOWN",
             "sleep": "EOD_SLEEP",
@@ -1096,20 +1109,98 @@ async def repair_evening_sleep_logouts(
         }.get(reason, "AUTO_LOGOUT")
         _apply_workday_metadata(day, f"WORKDAY|AUTO_LOGOUT|{status_key}|0 — {note}")
         meta = dict(day.metadata_json or {})
+        meta["corrected_logout_at"] = close_at.isoformat()
+        meta["corrected_logout_reason"] = reason
         meta["sleep_auto_logout_at"] = close_at.isoformat()
         meta["sleep_auto_logout_reason"] = f"{reason}_repair"
         day.metadata_json = meta
         await recalculate_attendance_day(db, day.id)
+        # Keep stored rollup aligned to rule logout even if a later spurious out exists.
+        refreshed = (
+            await db.execute(
+                select(AttendanceDay)
+                .options(selectinload(AttendanceDay.events))
+                .where(AttendanceDay.id == day.id)
+            )
+        ).scalars().first()
+        if refreshed is not None:
+            day = refreshed
+            # If recalculate still left a later shift_end (spurious out), clamp stored fields.
+            stored_end = ensure_utc(day.shift_end)
+            if stored_end is None or stored_end > close_at + timedelta(minutes=2):
+                day.shift_end = close_at
+                start = ensure_utc(day.shift_start) or close_at
+                day.total_work_minutes = max(0, int((close_at - start).total_seconds() // 60))
+                await db.flush()
+
         repaired.append(
             {
                 "employee_id": str(day.employee_id),
+                "full_name": None,
                 "work_date": work_date.isoformat(),
                 "reason": reason,
-                "left_at": leave_at.isoformat(),
-                "closed_at": close_at.isoformat(),
+                "login_at": (ensure_utc(day.shift_start) or close_at).isoformat(),
+                "logout_at": close_at.isoformat(),
+                "worked_minutes": int(day.total_work_minutes or 0),
+                "note": note,
             }
         )
     return repaired
+
+
+async def repair_organization_history(
+    db: AsyncSession,
+    *,
+    organization_id: uuid.UUID,
+    days: int = 3,
+) -> dict:
+    """
+    Scan Attendance history for the whole org for today and previous days-1,
+    correct logout + hours from presence rules, return what changed.
+    """
+    days = max(1, min(int(days), 14))
+    today = local_work_date(datetime.now(UTC))
+    emp_ids = list(
+        (
+            await db.execute(
+                select(EmployeeProfile.id).where(
+                    EmployeeProfile.organization_id == organization_id,
+                    EmployeeProfile.employment_status != EmploymentStatus.TERMINATED,
+                )
+            )
+        ).scalars().all()
+    )
+    name_rows = (
+        await db.execute(
+            select(EmployeeProfile.id, EmployeeProfile.first_name, EmployeeProfile.last_name).where(
+                EmployeeProfile.id.in_(emp_ids)
+            )
+        )
+    ).all() if emp_ids else []
+    names = {r[0]: f"{r[1]} {r[2]}".strip() for r in name_rows}
+
+    all_fixed: list[dict] = []
+    for offset in range(days):
+        work_date = today - timedelta(days=offset)
+        fixed = await repair_evening_sleep_logouts(db, emp_ids, work_date)
+        for row in fixed:
+            try:
+                eid = uuid.UUID(str(row["employee_id"]))
+            except (ValueError, TypeError):
+                eid = None
+            row["full_name"] = names.get(eid) if eid else None
+            row["employee_id"] = str(row["employee_id"])
+        all_fixed.extend(fixed)
+
+    await db.commit()
+    return {
+        "status": "ok",
+        "days_checked": days,
+        "from_date": (today - timedelta(days=days - 1)).isoformat(),
+        "to_date": today.isoformat(),
+        "repaired_count": len(all_fixed),
+        "repaired": all_fixed,
+    }
 
 
 async def get_presence_days(

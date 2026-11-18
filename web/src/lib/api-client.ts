@@ -782,6 +782,30 @@ export class ApiClient {
     return this.request<TeamPresenceResponse>(`/presence/team${date ? `?date=${date}` : ''}`);
   }
 
+  /**
+   * Backend audit: correct logout + hours from Attendance history rules
+   * (office Wi-Fi disconnect / sleep / shutdown) for the last N days.
+   */
+  async repairAttendanceHistory(days = 3): Promise<{
+    status: string;
+    days_checked: number;
+    from_date: string;
+    to_date: string;
+    repaired_count: number;
+    repaired: Array<{
+      employee_id: string;
+      full_name?: string | null;
+      work_date: string;
+      reason: string;
+      login_at?: string | null;
+      logout_at: string;
+      worked_minutes: number;
+      note?: string | null;
+    }>;
+  }> {
+    return this.request(`/presence/repair-history?days=${days}`, { method: 'POST' });
+  }
+
   async getEmployeePresenceHistory(employeeId: string, startDate: string, endDate: string): Promise<PresenceHistory> {
     return this.request<PresenceHistory>(
       `/presence/employee/${employeeId}/history?start_date=${startDate}&end_date=${endDate}`

@@ -29,6 +29,7 @@ from app.models.department import Department
 from app.models.employee import EmployeeProfile, ManagerAssignment
 from app.models.organization import Organization
 from app.schemas.presence import (
+    AttendanceRepairResponse,
     PresenceHistoryResponse,
     PresenceMonthSummary,
     PresenceProfile,
@@ -119,6 +120,33 @@ async def get_my_presence_history(
     start, end = _history_range(start_date, end_date)
     days = await presence_service.get_presence_days(db, current_emp, start, end)
     return PresenceHistoryResponse(start_date=start, end_date=end, days=days)
+
+
+@router.post("/repair-history", response_model=AttendanceRepairResponse)
+async def repair_attendance_history(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    days: Annotated[int, Query(ge=1, le=14)] = 3,
+) -> AttendanceRepairResponse:
+    """
+    Backend audit: read each employee's Attendance history presence events for the last N days,
+    set correct logout (office Wi-Fi disconnect / sleep / shutdown / 6:30 fallback),
+    recalculate hours, persist so Login & Logout table shows correct values.
+    """
+    role_name = (current_user.role.name if current_user.role else "").strip().lower()
+    if not (
+        current_user.is_superuser
+        or "admin" in role_name
+        or "hr" in role_name
+        or role_name == "human resources"
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin or HR only")
+    result = await presence_service.repair_organization_history(
+        db,
+        organization_id=current_user.organization_id,
+        days=days,
+    )
+    return AttendanceRepairResponse(**result)
 
 
 @router.get("/team", response_model=TeamPresenceResponse)

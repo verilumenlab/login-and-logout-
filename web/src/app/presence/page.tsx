@@ -105,6 +105,13 @@ export default function PresencePage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      // Backend checks Attendance history events and persists correct logout + hours,
+      // then Login & Logout table reads those corrected values.
+      try {
+        await apiClient.repairAttendanceHistory(3);
+      } catch {
+        // Non-admin viewers still get team board; repair is Admin/HR only.
+      }
       setData(await apiClient.getTeamPresence(date));
       setError(null);
     } catch (err) {

@@ -138,3 +138,23 @@ class PresenceMonthSummary(BaseModel):
     total_worked_minutes: int
     average_daily_minutes: int
     today: PresenceDay
+
+
+class AttendanceRepairRow(BaseModel):
+    employee_id: str
+    full_name: str | None = None
+    work_date: str
+    reason: str
+    login_at: str | None = None
+    logout_at: str
+    worked_minutes: int = 0
+    note: str | None = None
+
+
+class AttendanceRepairResponse(BaseModel):
+    status: str
+    days_checked: int
+    from_date: str
+    to_date: str
+    repaired_count: int
+    repaired: list[AttendanceRepairRow] = Field(default_factory=list)
