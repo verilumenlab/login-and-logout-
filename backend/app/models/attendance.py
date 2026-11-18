@@ -58,6 +58,7 @@ class BreakSource(str, enum.Enum):
     AUTO_IDLE = "AUTO_IDLE"
     AUTO_LOCK = "AUTO_LOCK"
     AUTO_SLEEP = "AUTO_SLEEP"
+    AUTO_APP_CLOSE = "AUTO_APP_CLOSE"
 
 
 class AdjustmentType(str, enum.Enum):

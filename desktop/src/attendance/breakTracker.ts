@@ -6,7 +6,7 @@
 import { BreakAwayPayload, getSystemIdleSeconds } from '../api/ipc';
 import { HttpError, NetworkError, syncOfflineAttendance } from '../api/backend';
 
-export type BreakSource = 'AUTO_IDLE' | 'AUTO_LOCK' | 'AUTO_SLEEP' | 'MANUAL';
+export type BreakSource = 'AUTO_IDLE' | 'AUTO_LOCK' | 'AUTO_SLEEP' | 'AUTO_APP_CLOSE' | 'MANUAL';
 export type BreakType = 'LUNCH' | 'COFFEE' | 'PERSONAL' | 'MEETING';
 
 export type OfflineBreakItem = {
@@ -155,6 +155,12 @@ export function handleBreakAwaySignal(signal: BreakAwayPayload, deviceId: string
     startAutoBreak('AUTO_SLEEP', deviceId, at);
   } else if (signal.signal === 'RESUME') {
     endAutoBreak(deviceId, at);
+  } else if (signal.signal === 'IDLE_START') {
+    startAutoBreak('AUTO_IDLE', deviceId, at);
+  } else if (signal.signal === 'IDLE_END') {
+    endAutoBreak(deviceId, at);
+  } else if (signal.signal === 'APP_CLOSE') {
+    startAutoBreak('AUTO_APP_CLOSE', deviceId, at);
   }
 }
 

@@ -1,10 +1,13 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage } = require('electron');
 const path = require('node:path');
 const native = require('./native.cjs');
 const powerPresence = require('./power-presence.cjs');
 const updater = require('./updater.cjs');
 
 const isDev = !app.isPackaged;
+let mainWindow = null;
+let tray = null;
+let isQuitting = false;
 
 function appIconPath() {
   const fs = require('node:fs');
@@ -35,8 +38,51 @@ function uiIndexPath() {
   return path.join(app.getAppPath(), 'dist', 'index.html');
 }
 
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createTray() {
+  if (tray) return;
+  const iconFile = appIconPath();
+  let image = iconFile ? nativeImage.createFromPath(iconFile) : nativeImage.createEmpty();
+  if (image.isEmpty()) {
+    // 16x16 placeholder so Tray still constructs on Windows
+    image = nativeImage.createFromDataURL(
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAAAHElEQVQoz2NgGAWjYBSMglEwCkbBKBgFo4D6AQB8AAH/YYvH1gAAAABJRU5ErkJggg=='
+    );
+  }
+  tray = new Tray(image);
+  tray.setToolTip('WorkPulse Employee — tracking stays on while in tray');
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Open WorkPulse', click: () => showMainWindow() },
+      { type: 'separator' },
+      {
+        label: 'Quit',
+        click: () => {
+          isQuitting = true;
+          try {
+            powerPresence.recordAppCloseBreak();
+          } catch (err) {
+            console.warn('[tray] recordAppCloseBreak failed:', err);
+          }
+          app.quit();
+        },
+      },
+    ])
+  );
+  tray.on('double-click', () => showMainWindow());
+}
+
 function createWindow() {
-  const win = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 440,
     height: 760,
     minWidth: 380,
@@ -53,12 +99,27 @@ function createWindow() {
     },
   });
 
+  const win = mainWindow;
   const reveal = () => {
     if (!win.isDestroyed() && !win.isVisible()) win.show();
   };
   win.once('ready-to-show', reveal);
   // If HTML/assets fail to load, still show a window instead of staying invisible.
   setTimeout(reveal, 4000);
+
+  // Closing the X hides to tray — idle/break tracking must keep running.
+  win.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      win.hide();
+      return;
+    }
+    try {
+      powerPresence.recordAppCloseBreak();
+    } catch (err) {
+      console.warn('[quit] recordAppCloseBreak failed:', err);
+    }
+  });
 
   win.webContents.on('did-fail-load', (_e, code, desc, url) => {
     console.error('[ui] did-fail-load', { code, desc, url });
@@ -137,6 +198,7 @@ function registerIpc() {
   });
   ipcMain.handle('wp:drainPowerEvents', async () => powerPresence.drainQueue());
   ipcMain.handle('wp:peekPowerEvents', async () => powerPresence.peekQueue());
+  ipcMain.handle('wp:drainBreakAwayQueue', async () => powerPresence.drainBreakQueue());
   ipcMain.handle('wp:getSystemIdleSeconds', async () => powerPresence.getSystemIdleSeconds());
   ipcMain.handle('wp:showNotification', async (_e, payload) => {
     const title = String(payload?.title || 'WorkPulse');
@@ -161,12 +223,24 @@ app.whenReady().then(async () => {
     channel: process.env.VITE_RELEASE_CHANNEL || 'production',
   });
   createWindow();
+  createTray();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    else showMainWindow();
   });
 });
 
+app.on('before-quit', () => {
+  isQuitting = true;
+  try {
+    powerPresence.recordAppCloseBreak();
+  } catch {
+    // ignore
+  }
+});
+
 app.on('window-all-closed', () => {
-  // Do not treat app close as logout (product rule).
-  if (process.platform !== 'darwin') app.quit();
+  // Stay alive in the tray on Windows so idle breaks still record.
+  if (process.platform === 'darwin') return;
+  if (isQuitting) app.quit();
 });

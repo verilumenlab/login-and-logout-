@@ -8,6 +8,7 @@ type PresenceSession = {
   signedIn: boolean;
   deviceId?: string | null;
   userId?: string | null;
+  workLoggedIn?: boolean;
 };
 
 export type UpdateStatusPayload = {
@@ -21,11 +22,19 @@ export type UpdateStatusPayload = {
   message?: string;
 };
 
-export type BreakAwaySignal = 'LOCK' | 'UNLOCK' | 'SUSPEND' | 'RESUME';
+export type BreakAwaySignal =
+  | 'LOCK'
+  | 'UNLOCK'
+  | 'SUSPEND'
+  | 'RESUME'
+  | 'IDLE_START'
+  | 'IDLE_END'
+  | 'APP_CLOSE';
 
 export type BreakAwayPayload = {
   signal: BreakAwaySignal;
   occurred_at: string;
+  device_id?: string | null;
 };
 
 type WorkpulseBridge = {
@@ -43,6 +52,7 @@ type WorkpulseBridge = {
   showNotification?: (payload: { title: string; body: string }) => Promise<{ ok: boolean; reason?: string }>;
   onPowerEventQueued: (callback: (event: PresenceEventIn) => void) => () => void;
   onBreakAwayQueued?: (callback: (event: BreakAwayPayload) => void) => () => void;
+  drainBreakAwayQueue?: () => Promise<BreakAwayPayload[]>;
   checkForUpdates?: () => Promise<unknown>;
   installUpdateNow?: () => Promise<{ ok: boolean; error?: string }>;
   getAppVersion?: () => Promise<string>;
@@ -225,6 +235,18 @@ export function onBreakAwayQueued(callback: (event: BreakAwayPayload) => void): 
   const wp = bridge();
   if (!wp?.onBreakAwayQueued) return () => undefined;
   return wp.onBreakAwayQueued(callback);
+}
+
+/** Durable break signals saved while the window was closed / app was quitting. */
+export async function drainBreakAwayQueue(): Promise<BreakAwayPayload[]> {
+  const wp = bridge();
+  if (!wp?.drainBreakAwayQueue) return [];
+  try {
+    return (await wp.drainBreakAwayQueue()) || [];
+  } catch (e) {
+    console.warn('[IPC] drainBreakAwayQueue failed:', e);
+    return [];
+  }
 }
 
 export function onUpdateStatus(callback: (payload: UpdateStatusPayload) => void): () => void {

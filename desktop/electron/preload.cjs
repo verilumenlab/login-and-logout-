@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('workpulse', {
   setPresenceSession: (session) => ipcRenderer.invoke('wp:setPresenceSession', session),
   drainPowerEvents: () => ipcRenderer.invoke('wp:drainPowerEvents'),
   peekPowerEvents: () => ipcRenderer.invoke('wp:peekPowerEvents'),
+  drainBreakAwayQueue: () => ipcRenderer.invoke('wp:drainBreakAwayQueue'),
   getSystemIdleSeconds: () => ipcRenderer.invoke('wp:getSystemIdleSeconds'),
   showNotification: (payload) => ipcRenderer.invoke('wp:showNotification', payload),
   onPowerEventQueued: (callback) => {

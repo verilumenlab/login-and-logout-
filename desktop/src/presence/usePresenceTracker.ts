@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   BreakAwayPayload,
+  drainBreakAwayQueue,
   getConnectedWifiInfo,
   getSystemIdleSeconds,
   onBreakAwayQueued,
@@ -120,10 +121,27 @@ export function usePresenceTracker(
   const workdayCheckRef = useRef(onWorkdayCheck);
   workdayCheckRef.current = onWorkdayCheck;
 
-  const setWorkLoggedIn = useCallback((value: boolean | null) => {
-    loggedInRef.current = value;
-    persistWorkLogin(value);
-  }, []);
+  const pushPresenceSession = useCallback(
+    async (workLoggedIn: boolean | null) => {
+      if (!device || !session) return;
+      await setPresenceSession({
+        signedIn: true,
+        deviceId: device.device_id,
+        userId: session.user_id,
+        workLoggedIn: workLoggedIn === true,
+      });
+    },
+    [device, session]
+  );
+
+  const setWorkLoggedIn = useCallback(
+    (value: boolean | null) => {
+      loggedInRef.current = value;
+      persistWorkLogin(value);
+      void pushPresenceSession(value);
+    },
+    [pushPresenceSession]
+  );
 
   const refreshBreakStatus = useCallback(() => {
     const open = getOpenBreak();
@@ -304,16 +322,34 @@ export function usePresenceTracker(
 
   useEffect(() => {
     if (!active || !device || !session) {
-      void setPresenceSession({ signedIn: false, deviceId: null, userId: null });
+      void setPresenceSession({ signedIn: false, deviceId: null, userId: null, workLoggedIn: false });
       return;
     }
     bindBreakQueueToUser(session.user_id);
-    void setPresenceSession({
-      signedIn: true,
-      deviceId: device.device_id,
-      userId: session.user_id,
-    });
-  }, [active, device, session]);
+    void (async () => {
+      await setPresenceSession({
+        signedIn: true,
+        deviceId: device.device_id,
+        userId: session.user_id,
+        workLoggedIn: loggedInRef.current === true,
+      });
+      // Apply durable idle/app-close break signals saved while the UI was gone.
+      const pending = await drainBreakAwayQueue();
+      for (const payload of pending) {
+        if (loggedInRef.current === true || payload.signal === 'APP_CLOSE') {
+          handleBreakAwaySignal(payload, device.device_id);
+        }
+      }
+      if (pending.length) {
+        refreshBreakStatus();
+        try {
+          await flushBreakQueue();
+        } catch {
+          // retry on next tick
+        }
+      }
+    })();
+  }, [active, device, session, refreshBreakStatus]);
 
   useEffect(() => {
     if (!active || !device) return;
