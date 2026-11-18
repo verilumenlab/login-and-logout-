@@ -39,12 +39,17 @@ from app.schemas.presence import (
 )
 from app.services import presence_service
 from app.services.attendance_csv_export import build_attendance_csv, period_range
+from app.services.attendance_engine import local_work_date
 from app.services.report_dataset import build_report_dataset
 
 router = APIRouter()
 
 MAX_HISTORY_DAYS = 92
 ExportPeriod = Literal["weekly", "monthly"]
+
+
+def _today_local() -> date:
+    return local_work_date(datetime.now(UTC))
 
 
 def _team_scope_employee_ids(
@@ -64,7 +69,7 @@ def _team_scope_employee_ids(
 
 
 def _history_range(start_date: date | None, end_date: date | None) -> tuple[date, date]:
-    end = end_date or datetime.now(UTC).date()
+    end = end_date or _today_local()
     start = start_date or end - timedelta(days=13)
     if start > end:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="start_date must be before end_date")
@@ -160,9 +165,9 @@ async def get_team_presence(
     Admin / HR / Manager see every employee in the organization.
     """
     role_name = (current_user.role.name if current_user.role else "").strip().lower()
-    day = work_date or datetime.now(UTC).date()
+    day = work_date or _today_local()
     # Browsers east of UTC (e.g. IST) are a calendar day ahead for part of the night.
-    if day > datetime.now(UTC).date() + timedelta(days=1):
+    if day > _today_local() + timedelta(days=1):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Date cannot be in the future")
 
     scope, employee_ids = _team_scope_employee_ids(current_user, role_name)
@@ -199,8 +204,8 @@ async def export_attendance_csv(
     Same visibility as the Login & Logout board (org for Admin/HR/Manager).
     """
     role_name = (current_user.role.name if current_user.role else "").strip().lower()
-    ref = work_date or datetime.now(UTC).date()
-    if ref > datetime.now(UTC).date() + timedelta(days=1):
+    ref = work_date or _today_local()
+    if ref > _today_local() + timedelta(days=1):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Date cannot be in the future")
 
     scope, employee_ids = _team_scope_employee_ids(current_user, role_name)
@@ -271,6 +276,6 @@ async def get_my_presence_summary(
     if month:
         year, month_num = (int(part) for part in month.split("-"))
     else:
-        today = datetime.now(UTC).date()
+        today = _today_local()
         year, month_num = today.year, today.month
     return await presence_service.get_month_summary(db, current_emp, year, month_num)

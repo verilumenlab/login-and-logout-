@@ -78,6 +78,8 @@ async def _load_user_with_role(
     )
     if organization_id:
         stmt = stmt.where(User.organization_id == organization_id)
+    # Prefer the most recently active account when the same email exists in multiple orgs.
+    stmt = stmt.order_by(User.last_login_at.desc().nulls_last(), User.created_at.desc())
     result = await db.execute(stmt)
     return result.scalars().first()
 

@@ -71,21 +71,22 @@ function liveMinutes(row: TeamPresenceRow, workDate: string): number {
   if (!row.first_login) return row.worked_minutes || 0;
   const { dayStart, dayEnd } = workDayWindow(workDate);
   const start = Math.max(new Date(row.first_login).getTime(), dayStart);
+  const serverMins = row.worked_minutes || 0;
 
-  if (row.status === 'LOGGED_OUT' && row.last_logout) {
-    const end = Math.min(new Date(row.last_logout).getTime(), dayEnd);
-    if (end > start) return (end - start) / 60000;
-    // Server already day-clamped; prefer that when client clamp collapses.
-    if ((row.worked_minutes || 0) > 0) return row.worked_minutes;
-    return 0;
+  // Prefer backend-corrected minutes for closed days (breaks/repairs already applied).
+  if (row.status === 'LOGGED_OUT') {
+    if (serverMins > 0 && serverMins <= 16 * 60) return serverMins;
+    if (row.last_logout) {
+      const end = Math.min(new Date(row.last_logout).getTime(), dayEnd);
+      if (end > start) return (end - start) / 60000;
+    }
+    return Math.max(0, serverMins);
   }
   if (row.status === 'LOGGED_IN') {
     const end = Math.min(Date.now(), dayEnd);
     return Math.max(0, (end - start) / 60000);
   }
-  if ((row.worked_minutes || 0) > 0 && (row.worked_minutes || 0) <= 16 * 60) {
-    return row.worked_minutes;
-  }
+  if (serverMins > 0 && serverMins <= 16 * 60) return serverMins;
   return Math.max(0, (Math.min(Date.now(), dayEnd) - start) / 60000);
 }
 
@@ -105,13 +106,8 @@ export default function PresencePage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      // Backend checks Attendance history events and persists correct logout + hours,
-      // then Login & Logout table reads those corrected values.
-      try {
-        await apiClient.repairAttendanceHistory(3);
-      } catch {
-        // Non-admin viewers still get team board; repair is Admin/HR only.
-      }
+      // Team board already runs lightweight same-day reopen/repair inside GET /presence/team.
+      // Do not POST org-wide repair-history on every refresh — that rewrote morning sessions to 6:30 PM.
       setData(await apiClient.getTeamPresence(date));
       setError(null);
     } catch (err) {

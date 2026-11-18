@@ -102,8 +102,14 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children
           localStorage.setItem(USER_KEY, JSON.stringify(info));
           setUser(info);
         })
-        .catch(() => {
-          // Offline or server error: keep the saved session; a 401 is handled by onSessionExpired.
+        .catch((err: unknown) => {
+          const status = (err as { status?: number; statusCode?: number })?.status
+            ?? (err as { statusCode?: number })?.statusCode;
+          const message = err instanceof Error ? err.message : String(err ?? '');
+          // Clear stale UI for auth failures; keep session only for offline/5xx.
+          if (status === 401 || status === 403 || /401|403|unauthorized|forbidden|disabled/i.test(message)) {
+            clearLocal(status === 403 ? 'This account is no longer allowed to use the portal.' : undefined);
+          }
         });
     } else if (token || saved) {
       clearLocal();

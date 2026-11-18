@@ -152,10 +152,14 @@ class LeaveEngine:
         """
         Retrieves or initializes the employee's LeaveBalance for the target year.
         """
-        stmt = select(LeaveBalance).where(
-            LeaveBalance.employee_id == employee_id,
-            LeaveBalance.leave_type_id == leave_type.id,
-            LeaveBalance.year == year,
+        stmt = (
+            select(LeaveBalance)
+            .where(
+                LeaveBalance.employee_id == employee_id,
+                LeaveBalance.leave_type_id == leave_type.id,
+                LeaveBalance.year == year,
+            )
+            .with_for_update()
         )
         result = await db.execute(stmt)
         balance = result.scalars().first()
@@ -657,7 +661,7 @@ class LeaveEngine:
             leave.hr_approval_status = ApprovalStatus.APPROVED
             leave.status = LeaveStatus.APPROVED
 
-            # Balance update
+            # Balance update — never double-count an already-approved request.
             bal_stmt = select(LeaveBalance).where(
                 LeaveBalance.employee_id == leave.employee_id,
                 LeaveBalance.leave_type_id == leave.leave_type_id,
@@ -665,7 +669,7 @@ class LeaveEngine:
             )
             bal_res = await db.execute(bal_stmt)
             balance = bal_res.scalars().first()
-            if balance:
+            if balance and old_status != "APPROVED":
                 if old_status == "PENDING":
                     balance.pending_days = max(0.0, balance.pending_days - leave.total_days)
                 balance.used_days += leave.total_days

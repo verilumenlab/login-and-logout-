@@ -67,8 +67,9 @@ export default function LeaveApprovalsPage() {
   const canAct = useCallback(
     (stage: Stage) => {
       if (role === 'ADMIN') return true;
-      // Manager has the same leave authority as HR (manager step + final HR step).
-      return role === 'HR' || role === 'MANAGER';
+      if (stage === 'MANAGER') return role === 'MANAGER' || role === 'HR';
+      if (stage === 'HR') return role === 'HR';
+      return false;
     },
     [role]
   );

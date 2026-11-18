@@ -76,14 +76,16 @@ export function queueAppEvent(
   type: Extract<PresenceEventType, 'APP_LOGIN' | 'APP_LOGOUT'>,
   deviceId: string,
   ssid?: string,
-  detail?: string | null
+  detail?: string | null,
+  occurredAt?: Date | string | null
 ): void {
-  const now = new Date();
+  const when = occurredAt ? new Date(occurredAt) : new Date();
+  const ms = Number.isFinite(when.getTime()) ? when.getTime() : Date.now();
   enqueue([
     {
-      client_event_id: `app:${shortDeviceTag(deviceId)}:${type}:${now.getTime()}`,
+      client_event_id: `app:${shortDeviceTag(deviceId)}:${type}:${ms}`,
       event_type: type,
-      occurred_at: now.toISOString(),
+      occurred_at: new Date(ms).toISOString(),
       ssid: ssid || null,
       device_id: deviceId,
       detail: detail || null,

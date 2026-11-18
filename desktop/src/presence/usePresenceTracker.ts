@@ -109,26 +109,40 @@ export function usePresenceTracker(
   }, []);
 
   const performWorkLogout = useCallback(
-    async (reason?: WorkdayLogoutReason | null) => {
+    async (reason?: WorkdayLogoutReason | null, occurredAt?: Date | string | null) => {
       if (!device) return false;
       endAutoBreak(device.device_id);
       const wifiNow = await getConnectedWifiInfo();
       const mins = workedMinutesNow();
       const detail = reason ? buildLogoutDetail(reason, mins) : null;
-      queueAppEvent('APP_LOGOUT', device.device_id, wifiNow.is_wifi ? wifiNow.ssid : undefined, detail);
+      // Use power-event time when provided so a late sync does not extend hours.
+      queueAppEvent(
+        'APP_LOGOUT',
+        device.device_id,
+        wifiNow.is_wifi ? wifiNow.ssid : undefined,
+        detail,
+        occurredAt
+      );
       clearWorkdaySession();
       workdayCheckRef.current?.(null);
       try {
         await flushBreakQueue();
         await flushQueue();
         loggedInRef.current = false;
+        setStatus((prev) => ({ ...prev, isLoggedIn: false }));
         return true;
-      } catch {
+      } catch (err) {
         loggedInRef.current = false;
+        setStatus((prev) => ({ ...prev, isLoggedIn: false }));
+        if (err instanceof DeviceBlockedError) {
+          onSessionExpired('blocked');
+        } else if (err instanceof SessionExpiredError) {
+          onSessionExpired('expired');
+        }
         return false;
       }
     },
-    [device]
+    [device, onSessionExpired]
   );
 
   const tick = useCallback(async () => {
@@ -136,14 +150,20 @@ export function usePresenceTracker(
     running.current = true;
     try {
       await ingestPowerEventsFromMain();
-      await evaluateIdleBreak(device.device_id);
+      // Breaks only while work-logged-in (not merely signed into the app).
+      if (loggedInRef.current === true) {
+        await evaluateIdleBreak(device.device_id);
+      }
 
       const wifi = await getConnectedWifiInfo();
       if (!appLoginQueued.current) {
         appLoginQueued.current = true;
         await collectWifiEvents(device.device_id, device.os_type);
-        queueAppEvent('APP_LOGIN', device.device_id, wifi.is_wifi ? wifi.ssid : undefined);
-        syncWorkStart(new Date());
+        // Auto clock-in once per app session, but not after an explicit work logout.
+        if (loggedInRef.current !== false) {
+          queueAppEvent('APP_LOGIN', device.device_id, wifi.is_wifi ? wifi.ssid : undefined);
+          syncWorkStart(new Date());
+        }
       } else {
         await collectWifiEvents(device.device_id, device.os_type);
       }
@@ -258,7 +278,7 @@ export function usePresenceTracker(
       ) {
         const reason = event.event_type === 'SYSTEM_SHUTDOWN' ? 'eod_shutdown' : 'eod_sleep';
         void (async () => {
-          await performWorkLogout(reason);
+          await performWorkLogout(reason, event.occurred_at);
           const msg = logoutNotice(reason);
           noticeRef.current?.(msg);
           void showDesktopNotification('WorkPulse — Auto logout', msg);
@@ -281,7 +301,7 @@ export function usePresenceTracker(
           isPastSleepLogoutTime(payload.occurred_at ? new Date(payload.occurred_at) : new Date()) &&
           loggedInRef.current === true
         ) {
-          await performWorkLogout('eod_sleep');
+          await performWorkLogout('eod_sleep', payload.occurred_at);
           const msg = logoutNotice('eod_sleep');
           noticeRef.current?.(msg);
           void showDesktopNotification('WorkPulse — Auto logout', msg);
@@ -352,13 +372,20 @@ export function usePresenceTracker(
     try {
       await flushQueue();
     } catch (err) {
-      // Keep local logged-in; events stay queued for the next sync cycle.
       console.warn('[presence] work login sync failed:', err);
+      if (err instanceof DeviceBlockedError) {
+        onSessionExpired('blocked');
+        return;
+      }
+      if (err instanceof SessionExpiredError) {
+        onSessionExpired('expired');
+        return;
+      }
     }
     // Do not await tick — if a poller cycle is already running, awaiting it
     // never resolves the click handler and the UI stays on "Logging in…".
     void tick();
-  }, [device, tick]);
+  }, [device, tick, onSessionExpired]);
 
   const recordWorkLogout = useCallback(
     async (reason?: WorkdayLogoutReason | null) => {

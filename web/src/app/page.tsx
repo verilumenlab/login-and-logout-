@@ -89,11 +89,13 @@ export default function Home() {
     setError(null);
     try {
       const days = weekdaysSoFar();
+      const todayKey = localDateInput(new Date());
       const [boards, leaves] = await Promise.all([
         Promise.all(days.map((d) => apiClient.getTeamPresence(d))),
         apiClient.listTeamLeaves('PENDING').catch(() => [] as LeaveRequest[]),
       ]);
-      const todayBoard = await apiClient.getTeamPresence(localDateInput(new Date()));
+      // Reuse today's board from the week fetch when present (avoid a duplicate GET).
+      const todayBoard = boards.find((_, i) => days[i] === todayKey) ?? (await apiClient.getTeamPresence(todayKey));
       setToday(todayBoard);
       setWeek(
         boards.map((b, i) => ({

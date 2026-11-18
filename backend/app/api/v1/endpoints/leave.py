@@ -649,6 +649,11 @@ async def approve_leave_request_legacy(
                 detail="Access denied: You can only approve leave requests for your assigned team members.",
             )
 
+    old_status = leave.status.value if hasattr(leave.status, "value") else str(leave.status)
+    if old_status == "APPROVED":
+        await db.refresh(leave)
+        return _serialize_leave_response(leave)
+
     leave.status = LeaveStatus.APPROVED
     leave.manager_approval_status = ApprovalStatus.APPROVED
     leave.hr_approval_status = ApprovalStatus.APPROVED
@@ -667,7 +672,7 @@ async def approve_leave_request_legacy(
         )
         db.add(approval)
 
-    # Update balance: pending -> used
+    # Update balance: pending -> used (skip if already approved)
     bal_stmt = select(LeaveBalance).where(
         LeaveBalance.employee_id == leave.employee_id,
         LeaveBalance.leave_type_id == leave.leave_type_id,
@@ -676,7 +681,8 @@ async def approve_leave_request_legacy(
     bal_res = await db.execute(bal_stmt)
     balance = bal_res.scalars().first()
     if balance:
-        balance.pending_days = max(0.0, balance.pending_days - leave.total_days)
+        if old_status == "PENDING":
+            balance.pending_days = max(0.0, balance.pending_days - leave.total_days)
         balance.used_days += leave.total_days
 
     await db.commit()

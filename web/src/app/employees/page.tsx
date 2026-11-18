@@ -94,15 +94,16 @@ export default function EmployeesPage() {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importResult, setImportResult] = useState<EmployeeImportResult | null>(null);
 
-  const fetchEmployees = async () => {
+  const fetchEmployees = async (pageOverride?: number) => {
     setLoading(true);
     setError(null);
+    const pageToUse = pageOverride ?? page;
     try {
       const res = await apiClient.listEmployees({
         search: searchTerm || undefined,
         department_id: selectedDept || undefined,
         employment_status: selectedStatus || undefined,
-        page,
+        page: pageToUse,
         page_size: pageSize,
       });
       setEmployees(res.items);
@@ -135,7 +136,7 @@ export default function EmployeesPage() {
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setPage(1);
-    fetchEmployees();
+    void fetchEmployees(1);
   };
 
   const validateForm = (): boolean => {

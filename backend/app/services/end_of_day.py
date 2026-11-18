@@ -152,8 +152,13 @@ async def run_end_of_day_idle_logout(
                     bs = ensure_utc(br.start_time)
                     if bs is not None and (break_start is None or bs < break_start):
                         break_start = bs
+            # Do not backdate morning/afternoon idle to a logout before 6:00 PM.
+            # Sleep/idle after 6:00 PM keeps the real break start; earlier idle stops at 6:30.
+            from app.core.office_policy import SLEEP_LOGOUT_AFTER
+
+            evening = datetime.combine(work_date, SLEEP_LOGOUT_AFTER, tzinfo=org_zone()).astimezone(UTC)
             if break_start is not None and break_start >= last_in:
-                close_at = break_start
+                close_at = break_start if break_start >= evening else cutoff
             else:
                 close_at = cutoff if last_in <= cutoff else last_in
             reason = "sleep_break" if any(

@@ -29,9 +29,16 @@ export default function ReportsPage() {
   const [reportType, setReportType] = useState('ATTENDANCE_SUMMARY');
   const [reports, setReports] = useState<ReportJob[]>([]);
 
-  // Prompt 17: Manual Report Dispatch & Preview States
-  const [manualStartDate, setManualStartDate] = useState('2026-11-06');
-  const [manualEndDate, setManualEndDate] = useState('2026-11-13');
+  // Manual report range defaults to the last 7 local calendar days.
+  const [manualStartDate, setManualStartDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 6);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
+  const [manualEndDate, setManualEndDate] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
   const [manualRecipients, setManualRecipients] = useState('hr@enterprise.local, manager@enterprise.local');
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewData, setPreviewData] = useState<any>(null);

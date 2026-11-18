@@ -53,7 +53,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await db.commit()
     except Exception:
         # Never block API startup if policy sync fails (e.g. migrations pending).
-        pass
+        import logging
+
+        logging.getLogger(__name__).exception("Startup seed/repair failed")
 
     yield
     await close_redis_client()

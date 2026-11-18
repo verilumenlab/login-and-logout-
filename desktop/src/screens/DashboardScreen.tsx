@@ -22,6 +22,8 @@ interface DashboardScreenProps {
   session: UserSession;
   dataVersion: number;
   breakStatus?: BreakTrackerStatus;
+  /** Local tracker logged-in flag — used when server summary is still stale. */
+  trackerLoggedIn?: boolean | null;
   onWorkLogin?: () => Promise<void>;
   onWorkLogout?: () => Promise<void>;
   onFirstLoginKnown?: (iso: string) => void;
@@ -35,6 +37,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   session,
   dataVersion,
   breakStatus,
+  trackerLoggedIn,
   onWorkLogin,
   onWorkLogout,
   onFirstLoginKnown,
@@ -55,7 +58,8 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
         getLeaveBalances().catch(() => [] as LeaveBalance[]),
       ]);
       setSummary(presence);
-      if (presence.today?.first_login) {
+      // Only seed 9h policy from an open session — not a closed prior logout day.
+      if (presence.today?.first_login && presence.today?.is_logged_in) {
         onFirstLoginKnown?.(presence.today.first_login);
       }
       setBalances(
@@ -95,7 +99,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   };
 
   const today = summary?.today;
-  const isWorking = Boolean(today?.is_logged_in);
+  const isWorking = Boolean(today?.is_logged_in) || trackerLoggedIn === true;
   const todayMinutes = (() => {
     if (!today?.first_login) return today?.worked_minutes ?? 0;
     const startMs = new Date(today.first_login).getTime();

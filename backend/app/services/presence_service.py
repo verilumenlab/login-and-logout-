@@ -128,7 +128,7 @@ async def _add_attendance_event(
         )
     )
     await db.flush()
-    await recalculate_attendance_day(db, day.id)
+    await recalculate_attendance_day(db, day.id, commit=False)
 
 
 async def _clock_in(
@@ -519,7 +519,29 @@ async def record_presence_event(
             attendance_action=action.value,
         )
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        # Concurrent duplicate sync → treat as already recorded.
+        from sqlalchemy.exc import IntegrityError
+
+        if isinstance(exc, IntegrityError):
+            existing_dup = (
+                await db.execute(
+                    select(PresenceEvent).where(
+                        PresenceEvent.employee_id == employee.id,
+                        PresenceEvent.client_event_id == event.client_event_id,
+                    )
+                )
+            ).scalars().first()
+            if existing_dup is not None:
+                return PresenceEventResult(
+                    client_event_id=event.client_event_id,
+                    status="DUPLICATE",
+                    attendance_action=PresenceAttendanceAction(existing_dup.attendance_action),
+                )
+        raise
     return PresenceEventResult(client_event_id=event.client_event_id, status="RECORDED", attendance_action=action)
 
 
@@ -614,12 +636,13 @@ def _infer_effective_logout(
         ssid = sig.ssid
         is_office = _ssid_is_office(ssid, office_ssids)
 
-        # Back on office network (or app login on office Wi-Fi) → work continues.
+        # Back on office network → work continues.
         if et in (PresenceEventType.WIFI_CONNECTED.value, "WIFI_CONNECTED") and is_office:
             logout_at = None
             reason = None
             continue
-        if et in (PresenceEventType.APP_LOGIN.value, "APP_LOGIN") and is_office:
+        # Any APP_LOGIN reopens the day (SSID optional — desktop often sends none).
+        if et in (PresenceEventType.APP_LOGIN.value, "APP_LOGIN"):
             logout_at = None
             reason = None
             continue
@@ -635,7 +658,8 @@ def _infer_effective_logout(
             reason = "app_logout"
             continue
 
-        if et in (PresenceEventType.SYSTEM_SHUTDOWN.value, "SYSTEM_SHUTDOWN"):
+        # Shutdown after 6:00 PM ends the day; midday reboot is break/audit only for inference.
+        if et in (PresenceEventType.SYSTEM_SHUTDOWN.value, "SYSTEM_SHUTDOWN") and ts >= evening_start:
             logout_at = ts
             reason = "shutdown"
             continue
@@ -1338,10 +1362,12 @@ async def get_presence_days(
 ) -> list[PresenceDay]:
     """Per-day login/logout table rows (newest first) with the raw app and Wi-Fi events of each day."""
     now = datetime.now(UTC)
-    # Repair sleep-after-6:00 logouts across the history window so hours match sleep time.
+    # Repair only recent days (today + 2) — full-month repair on every history view is too heavy/risky.
+    today_local = local_work_date(now)
     cursor = start_date
     while cursor <= end_date:
-        await repair_evening_sleep_logouts(db, [employee.id], cursor)
+        if cursor >= today_local - timedelta(days=2):
+            await repair_evening_sleep_logouts(db, [employee.id], cursor)
         cursor = cursor + timedelta(days=1)
 
     days = (
@@ -1748,7 +1774,7 @@ async def get_month_summary(
     month: int,
 ) -> PresenceMonthSummary:
     """Dashboard totals: working days vs present vs leave vs absent, plus total login time."""
-    today = datetime.now(UTC).date()
+    today = local_work_date(datetime.now(UTC))
     month_start = date(year, month, 1)
     month_end = date(year, month, calendar.monthrange(year, month)[1])
     elapsed_end = min(today, month_end)

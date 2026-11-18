@@ -224,6 +224,7 @@ export default function App() {
             session={session}
             dataVersion={dataVersion}
             breakStatus={breakStatus}
+            trackerLoggedIn={status.isLoggedIn}
             onWorkLogin={recordWorkLogin}
             onWorkLogout={handleWorkLogoutClick}
             onFirstLoginKnown={syncWorkStartFromServer}

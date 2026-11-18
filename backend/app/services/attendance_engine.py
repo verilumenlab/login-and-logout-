@@ -264,7 +264,7 @@ def classify_break_type(
     if start is None:
         return current or BreakType.PERSONAL
 
-    local_start = start.astimezone()
+    local_start = start.astimezone(org_zone())
     in_lunch_window = LUNCH_WINDOW_START_HOUR <= local_start.hour < LUNCH_WINDOW_END_HOUR
 
     if end_time is None:
@@ -469,12 +469,17 @@ async def recalculate_attendance_day(
     attendance_day_id: uuid.UUID,
     audit_actor_user_id: uuid.UUID | None = None,
     audit_reason: str | None = None,
+    *,
+    commit: bool = True,
 ) -> AttendanceDay:
     """
     Deterministic recalculation of an AttendanceDay record.
     Loads associated events, breaks, schedule, holidays, and leaves,
     runs calculate_daily_attendance, and commits updated rollup values.
     Preserves all original discrete events.
+
+    Pass commit=False when the caller still has more writes in the same unit of work
+    (e.g. presence ingest) so attendance + PresenceEvent stay atomic.
     """
     stmt = (
         select(AttendanceDay)
@@ -588,6 +593,10 @@ async def recalculate_attendance_day(
             },
         )
         db.add(audit)
+
+    if not commit:
+        await db.flush()
+        return att_day
 
     await db.commit()
     reloaded_res = await db.execute(

@@ -428,7 +428,9 @@ async def get_current_attendance_status(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> CurrentAttendanceStatusResponse:
     """Returns current real-time attendance state for the authenticated employee."""
-    today = datetime.now(UTC).date()
+    from app.services.attendance_engine import is_clock_in, local_work_date
+
+    today = local_work_date(datetime.now(UTC))
 
     stmt = (
         select(AttendanceDay)
@@ -449,7 +451,10 @@ async def get_current_attendance_status(
     # Check open breaks
     active_break = next((b for b in att_day.breaks if b.end_time is None), None)
 
-    mode = "ON_BREAK" if active_break else ("CLOCKED_OUT" if att_day.shift_end else "CLOCKED_IN")
+    # Latest CLOCK_IN/OUT wins — shift_end alone is wrong after same-day re-login.
+    ordered_ev = sorted(att_day.events or [], key=lambda e: e.timestamp or datetime.min.replace(tzinfo=UTC))
+    still_in = bool(ordered_ev) and is_clock_in(ordered_ev[-1].event_type)
+    mode = "ON_BREAK" if active_break else ("CLOCKED_IN" if still_in else "CLOCKED_OUT")
 
     break_resp = None
     if active_break:
