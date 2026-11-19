@@ -1254,6 +1254,12 @@ export class ApiClient {
     });
   }
 
+  /** Breaks for one employee on one work date (for Keep/Remove UI). */
+  async getEmployeeBreaks(employeeId: string, workDate: string): Promise<PresenceBreak[]> {
+    const qs = new URLSearchParams({ work_date: workDate });
+    return this.request<PresenceBreak[]>(`/attendance/employee/${employeeId}/breaks?${qs.toString()}`);
+  }
+
   /** Admin only: keep (confirm) or edit a break record. */
   async adminBreakAction(
     breakId: string,

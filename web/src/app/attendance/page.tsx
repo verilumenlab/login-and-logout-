@@ -56,6 +56,42 @@ function formatDay(dateStr: string): string {
   return new Date(`${dateStr}T00:00:00`).toLocaleDateString([], { weekday: 'short', day: '2-digit', month: 'short' });
 }
 
+function breaksForDay(day: PresenceDay, loaded?: PresenceBreak[]): PresenceBreak[] {
+  if (loaded && loaded.length > 0) return loaded;
+  if (day.breaks && day.breaks.length > 0) return day.breaks;
+
+  // Fallback: rebuild from timeline events that carry break_id.
+  const map = new Map<string, PresenceBreak>();
+  for (const ev of day.events || []) {
+    if (!ev.break_id) continue;
+    if (ev.event_type !== 'BREAK_START' && ev.event_type !== 'BREAK_END') continue;
+    const existing = map.get(ev.break_id) || {
+      id: ev.break_id,
+      break_type: 'PERSONAL',
+      start_time: ev.occurred_at,
+      end_time: null,
+      duration_minutes: null,
+      source: 'AUTO',
+      reason: null,
+      admin_kept: false,
+    };
+    const detail = String(ev.detail || '');
+    const typePart = detail.split('·')[0]?.trim();
+    if (typePart) existing.break_type = typePart;
+    if (ev.event_type === 'BREAK_START') {
+      existing.start_time = ev.occurred_at;
+      if (detail.includes('AUTO')) existing.source = detail.split('·')[1]?.trim() || existing.source;
+    }
+    if (ev.event_type === 'BREAK_END') {
+      existing.end_time = ev.occurred_at;
+      const mins = detail.match(/(\d+)\s*m/i);
+      if (mins) existing.duration_minutes = Number(mins[1]);
+    }
+    map.set(ev.break_id, existing);
+  }
+  return Array.from(map.values()).sort((a, b) => a.start_time.localeCompare(b.start_time));
+}
+
 export default function AttendancePage() {
   const { role } = useRole();
   const isAdmin = role === 'ADMIN';
@@ -69,6 +105,7 @@ export default function AttendancePage() {
   const [error, setError] = useState<string | null>(null);
   const [breakBusyId, setBreakBusyId] = useState<string | null>(null);
   const [breakNotice, setBreakNotice] = useState<string | null>(null);
+  const [dayBreaks, setDayBreaks] = useState<Record<string, PresenceBreak[]>>({});
 
   // Default period = last 3 days so 16/17/18 show with full detail.
   useEffect(() => {
@@ -96,6 +133,7 @@ export default function AttendancePage() {
       // History GET already repairs the requested window server-side; avoid org-wide POST on every view.
       const loaded = (await apiClient.getEmployeePresenceHistory(employeeId, start, end)).days;
       setDays(loaded);
+      setDayBreaks({});
       // Auto-expand the newest day that has a login so event detail is visible.
       const newest = loaded.find((d) => d.first_login);
       setExpanded(newest?.work_date ?? loaded[0]?.work_date ?? null);
@@ -110,6 +148,29 @@ export default function AttendancePage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!employeeId || !expanded) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows = await apiClient.getEmployeeBreaks(employeeId, expanded);
+        if (cancelled) return;
+        setDayBreaks((prev) => ({
+          ...prev,
+          [expanded]: rows.map((r) => ({
+            ...r,
+            admin_kept: Boolean(r.admin_kept || (r.reason && /admin kept/i.test(r.reason))),
+          })),
+        }));
+      } catch {
+        // History payload may already include breaks; ignore secondary fetch errors.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [employeeId, expanded]);
 
   const choosePreset = (id: RangeId) => {
     setRange(id);
@@ -322,6 +383,7 @@ export default function AttendancePage() {
               const open = expanded === d.work_date;
               const corrected = correctedHistoryDay(d);
               const showActive = Boolean(d.is_logged_in && !corrected.powerOffEvent);
+              const dayBreakList = breaksForDay(d, dayBreaks[d.work_date]);
               return (
                 <React.Fragment key={d.work_date}>
                   <tr
@@ -366,79 +428,89 @@ export default function AttendancePage() {
                   {open && (
                     <tr className="bg-slate-50/60 dark:bg-slate-800/30">
                       <td colSpan={6} className="px-10 py-3 space-y-4">
-                        {(d.breaks?.length || 0) > 0 && (
+                        {(dayBreakList.length > 0 || (d.break_count || 0) > 0) && (
                           <div className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50/70 dark:bg-amber-950/20 p-3">
                             <div className="text-[11px] font-bold text-amber-900 dark:text-amber-200 mb-2 flex items-center gap-1.5">
                               <Coffee className="w-3.5 h-3.5" />
                               Break times
-                              {!isAdmin && (
+                              {isAdmin ? (
+                                <span className="font-medium text-amber-800/80">— Keep or Remove</span>
+                              ) : (
                                 <span className="font-medium text-amber-700/80 dark:text-amber-300/80">
                                   (view only — admin can keep or remove)
                                 </span>
                               )}
                             </div>
-                            <ul className="space-y-2">
-                              {(d.breaks || []).map((br) => (
-                                <li
-                                  key={br.id}
-                                  className="flex flex-col sm:flex-row sm:items-center gap-2 justify-between text-xs bg-white/80 dark:bg-slate-900/50 border border-amber-100 dark:border-amber-900/40 rounded-lg px-3 py-2"
-                                >
-                                  <div className="min-w-0">
-                                    <div className="font-semibold text-slate-800 dark:text-slate-100">
-                                      {br.break_type}
-                                      <span className="ml-2 font-normal text-slate-500">
-                                        {formatTime(br.start_time)}
-                                        {br.end_time ? ` – ${formatTime(br.end_time)}` : ' – open'}
-                                        {typeof br.duration_minutes === 'number'
-                                          ? ` · ${formatDuration(br.duration_minutes)}`
-                                          : ''}
-                                      </span>
+                            {dayBreakList.length === 0 ? (
+                              <div className="text-[11px] text-amber-800/80">Loading break details…</div>
+                            ) : (
+                              <ul className="space-y-2">
+                                {dayBreakList.map((br) => (
+                                  <li
+                                    key={br.id}
+                                    className="flex flex-col sm:flex-row sm:items-center gap-2 justify-between text-xs bg-white/80 dark:bg-slate-900/50 border border-amber-100 dark:border-amber-900/40 rounded-lg px-3 py-2"
+                                  >
+                                    <div className="min-w-0">
+                                      <div className="font-semibold text-slate-800 dark:text-slate-100">
+                                        {br.break_type}
+                                        <span className="ml-2 font-normal text-slate-500">
+                                          {formatTime(br.start_time)}
+                                          {br.end_time ? ` – ${formatTime(br.end_time)}` : ' – open'}
+                                          {typeof br.duration_minutes === 'number'
+                                            ? ` · ${formatDuration(br.duration_minutes)}`
+                                            : ''}
+                                        </span>
+                                      </div>
+                                      <div className="text-[10px] text-slate-500 mt-0.5">
+                                        {br.source}
+                                        {br.admin_kept ? ' · kept by admin' : ''}
+                                        {br.reason ? ` · ${br.reason}` : ''}
+                                      </div>
                                     </div>
-                                    <div className="text-[10px] text-slate-500 mt-0.5">
-                                      {br.source}
-                                      {br.admin_kept ? ' · kept by admin' : ''}
-                                      {br.reason ? ` · ${br.reason}` : ''}
-                                    </div>
-                                  </div>
-                                  {isAdmin && (
-                                    <div className="flex items-center gap-2 shrink-0">
-                                      <button
-                                        type="button"
-                                        disabled={breakBusyId === br.id || br.admin_kept}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          void handleKeepBreak(br);
-                                        }}
-                                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[11px] font-semibold border border-emerald-200 bg-emerald-50 text-emerald-800 disabled:opacity-50"
-                                      >
-                                        <Check className="w-3 h-3" />
-                                        {br.admin_kept ? 'Kept' : 'Keep'}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        disabled={breakBusyId === br.id}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          void handleRemoveBreak(br);
-                                        }}
-                                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[11px] font-semibold border border-rose-200 bg-rose-50 text-rose-800 disabled:opacity-50"
-                                      >
-                                        <Trash2 className="w-3 h-3" />
-                                        Remove
-                                      </button>
-                                    </div>
-                                  )}
-                                </li>
-                              ))}
-                            </ul>
+                                    {isAdmin && (
+                                      <div className="flex items-center gap-2 shrink-0">
+                                        <button
+                                          type="button"
+                                          disabled={breakBusyId === br.id || Boolean(br.admin_kept)}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            void handleKeepBreak(br);
+                                          }}
+                                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[11px] font-semibold border border-emerald-200 bg-emerald-50 text-emerald-800 disabled:opacity-50"
+                                        >
+                                          <Check className="w-3 h-3" />
+                                          {br.admin_kept ? 'Kept' : 'Keep'}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={breakBusyId === br.id}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            void handleRemoveBreak(br);
+                                          }}
+                                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[11px] font-semibold border border-rose-200 bg-rose-50 text-rose-800 disabled:opacity-50"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                          Remove
+                                        </button>
+                                      </div>
+                                    )}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
                           </div>
                         )}
                         {d.events.length === 0 ? (
                           <span className="text-slate-400">No app or Wi-Fi events for this day.</span>
                         ) : (
                           <ul className="space-y-1.5">
-                            {d.events.map((ev, i) => (
-                              <li key={`${ev.occurred_at}-${i}`} className="flex items-center gap-2">
+                            {d.events.map((ev, i) => {
+                              const linkedBreak = ev.break_id
+                                ? dayBreakList.find((b) => b.id === ev.break_id)
+                                : undefined;
+                              return (
+                              <li key={`${ev.occurred_at}-${i}`} className="flex flex-wrap items-center gap-2">
                                 <span className="w-16 font-semibold tabular-nums">{formatTime(ev.occurred_at)}</span>
                                 <EventIcon type={ev.event_type} />
                                 <span>{EVENT_LABELS[ev.event_type] ?? ev.event_type}</span>
@@ -456,6 +528,32 @@ export default function AttendancePage() {
                                     break time
                                   </span>
                                 )}
+                                {isAdmin && linkedBreak && ev.event_type === 'BREAK_START' && (
+                                  <span className="inline-flex items-center gap-1 ml-1">
+                                    <button
+                                      type="button"
+                                      disabled={breakBusyId === linkedBreak.id || Boolean(linkedBreak.admin_kept)}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        void handleKeepBreak(linkedBreak);
+                                      }}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold border border-emerald-200 bg-emerald-50 text-emerald-800 disabled:opacity-50"
+                                    >
+                                      <Check className="w-3 h-3" /> Keep
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={breakBusyId === linkedBreak.id}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        void handleRemoveBreak(linkedBreak);
+                                      }}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold border border-rose-200 bg-rose-50 text-rose-800 disabled:opacity-50"
+                                    >
+                                      <Trash2 className="w-3 h-3" /> Remove
+                                    </button>
+                                  </span>
+                                )}
                                 {ev.attendance_action === 'CLOCK_IN' && (
                                   <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold">
                                     counted as login
@@ -467,7 +565,8 @@ export default function AttendancePage() {
                                   </span>
                                 )}
                               </li>
-                            ))}
+                              );
+                            })}
                           </ul>
                         )}
                       </td>

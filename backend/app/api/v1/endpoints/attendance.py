@@ -657,6 +657,31 @@ async def trigger_attendance_recalculation(
     return recalc_day
 
 
+@router.get("/employee/{employee_id}/breaks", response_model=list[AttendanceBreakResponse])
+async def list_employee_breaks(
+    employee_id: uuid.UUID,
+    target_emp_id: Annotated[uuid.UUID, Depends(require_employee_access)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    work_date: date = Query(..., description="Local work date YYYY-MM-DD"),
+) -> list[AttendanceBreak]:
+    """List recorded breaks for one employee on one day (portal attendance UI)."""
+    day_res = await db.execute(
+        select(AttendanceDay).where(
+            AttendanceDay.employee_id == target_emp_id,
+            AttendanceDay.work_date == work_date,
+        )
+    )
+    day = day_res.scalars().first()
+    if not day:
+        return []
+    breaks_res = await db.execute(
+        select(AttendanceBreak)
+        .where(AttendanceBreak.attendance_day_id == day.id)
+        .order_by(AttendanceBreak.start_time)
+    )
+    return list(breaks_res.scalars().all())
+
+
 @router.post("/breaks/{break_id}/admin", response_model=AttendanceBreakResponse)
 async def admin_keep_or_update_break(
     break_id: uuid.UUID,
