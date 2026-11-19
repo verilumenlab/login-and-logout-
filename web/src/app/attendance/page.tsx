@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Clock, Coffee, LogIn, LogOut, RefreshCw, Wifi, WifiOff } from 'lucide-react';
-import { apiClient, PresenceDay, PresenceEvent, TeamPresenceRow } from '@/lib/api-client';
+import { Check, ChevronDown, ChevronRight, Clock, Coffee, LogIn, LogOut, RefreshCw, Trash2, Wifi, WifiOff } from 'lucide-react';
+import { apiClient, PresenceBreak, PresenceDay, TeamPresenceRow } from '@/lib/api-client';
 import { correctedHistoryDay, isPowerOffCountedAsLogout } from '@/lib/attendanceDisplay';
 import { formatDuration, formatTime, localDateInput, shiftDate } from '@/lib/format';
+import { useRole } from '@/components/RoleContext';
 
 function logoutReasonLabel(reason?: string | null): string | null {
   if (!reason) return null;
@@ -56,6 +57,8 @@ function formatDay(dateStr: string): string {
 }
 
 export default function AttendancePage() {
+  const { role } = useRole();
+  const isAdmin = role === 'ADMIN';
   const [people, setPeople] = useState<TeamPresenceRow[]>([]);
   const [employeeId, setEmployeeId] = useState('');
   const [range, setRange] = useState<RangeId>('week');
@@ -64,6 +67,8 @@ export default function AttendancePage() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [breakBusyId, setBreakBusyId] = useState<string | null>(null);
+  const [breakNotice, setBreakNotice] = useState<string | null>(null);
 
   // Default period = last 3 days so 16/17/18 show with full detail.
   useEffect(() => {
@@ -127,6 +132,40 @@ export default function AttendancePage() {
 
   const selected = people.find((p) => p.employee_id === employeeId);
 
+  const handleKeepBreak = async (br: PresenceBreak) => {
+    if (!isAdmin) return;
+    setBreakBusyId(br.id);
+    setBreakNotice(null);
+    try {
+      await apiClient.adminBreakAction(br.id, { action: 'keep', notes: 'Kept by admin' });
+      setBreakNotice('Break kept.');
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not keep break');
+    } finally {
+      setBreakBusyId(null);
+    }
+  };
+
+  const handleRemoveBreak = async (br: PresenceBreak) => {
+    if (!isAdmin) return;
+    const ok = window.confirm(
+      `Remove this ${br.break_type} break (${formatTime(br.start_time)}${br.end_time ? ` – ${formatTime(br.end_time)}` : ''})?\nIt will no longer count in break time.`
+    );
+    if (!ok) return;
+    setBreakBusyId(br.id);
+    setBreakNotice(null);
+    try {
+      await apiClient.adminRemoveBreak(br.id, 'Removed by admin');
+      setBreakNotice('Break removed.');
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not remove break');
+    } finally {
+      setBreakBusyId(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
@@ -136,6 +175,7 @@ export default function AttendancePage() {
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
             Login, logout reason, office Wi‑Fi disconnect, sleep/shutdown, breaks and hours for each day.
+            {isAdmin ? ' Admins can Keep or Remove break times below.' : ''}
           </p>
         </div>
         <button
@@ -217,11 +257,22 @@ export default function AttendancePage() {
           {error}
         </div>
       )}
+      {breakNotice && (
+        <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs flex items-center justify-between gap-2">
+          <span>{breakNotice}</span>
+          <button type="button" onClick={() => setBreakNotice(null)} className="font-semibold" aria-label="Dismiss">
+            ×
+          </button>
+        </div>
+      )}
 
       <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 px-4 py-3 text-[11px] text-slate-600 dark:text-slate-300 space-y-1">
         <div className="font-semibold text-slate-800 dark:text-slate-100">How logout & hours are decided</div>
         <div>Office Wi‑Fi disconnect → logout at that time · Sleep/shutdown after 6:00 PM → logout · Breaks shown separately (not removed from hours)</div>
         <div>Click a day row to open the full timeline (login, Wi‑Fi, sleep, shutdown, breaks).</div>
+        {isAdmin && (
+          <div>Admin: open a day → Break times → Keep (confirm) or Remove (delete from totals).</div>
+        )}
       </div>
 
       {selected && (
@@ -314,7 +365,74 @@ export default function AttendancePage() {
                   </tr>
                   {open && (
                     <tr className="bg-slate-50/60 dark:bg-slate-800/30">
-                      <td colSpan={6} className="px-10 py-3">
+                      <td colSpan={6} className="px-10 py-3 space-y-4">
+                        {(d.breaks?.length || 0) > 0 && (
+                          <div className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50/70 dark:bg-amber-950/20 p-3">
+                            <div className="text-[11px] font-bold text-amber-900 dark:text-amber-200 mb-2 flex items-center gap-1.5">
+                              <Coffee className="w-3.5 h-3.5" />
+                              Break times
+                              {!isAdmin && (
+                                <span className="font-medium text-amber-700/80 dark:text-amber-300/80">
+                                  (view only — admin can keep or remove)
+                                </span>
+                              )}
+                            </div>
+                            <ul className="space-y-2">
+                              {(d.breaks || []).map((br) => (
+                                <li
+                                  key={br.id}
+                                  className="flex flex-col sm:flex-row sm:items-center gap-2 justify-between text-xs bg-white/80 dark:bg-slate-900/50 border border-amber-100 dark:border-amber-900/40 rounded-lg px-3 py-2"
+                                >
+                                  <div className="min-w-0">
+                                    <div className="font-semibold text-slate-800 dark:text-slate-100">
+                                      {br.break_type}
+                                      <span className="ml-2 font-normal text-slate-500">
+                                        {formatTime(br.start_time)}
+                                        {br.end_time ? ` – ${formatTime(br.end_time)}` : ' – open'}
+                                        {typeof br.duration_minutes === 'number'
+                                          ? ` · ${formatDuration(br.duration_minutes)}`
+                                          : ''}
+                                      </span>
+                                    </div>
+                                    <div className="text-[10px] text-slate-500 mt-0.5">
+                                      {br.source}
+                                      {br.admin_kept ? ' · kept by admin' : ''}
+                                      {br.reason ? ` · ${br.reason}` : ''}
+                                    </div>
+                                  </div>
+                                  {isAdmin && (
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      <button
+                                        type="button"
+                                        disabled={breakBusyId === br.id || br.admin_kept}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          void handleKeepBreak(br);
+                                        }}
+                                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[11px] font-semibold border border-emerald-200 bg-emerald-50 text-emerald-800 disabled:opacity-50"
+                                      >
+                                        <Check className="w-3 h-3" />
+                                        {br.admin_kept ? 'Kept' : 'Keep'}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={breakBusyId === br.id}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          void handleRemoveBreak(br);
+                                        }}
+                                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[11px] font-semibold border border-rose-200 bg-rose-50 text-rose-800 disabled:opacity-50"
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                        Remove
+                                      </button>
+                                    </div>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
                         {d.events.length === 0 ? (
                           <span className="text-slate-400">No app or Wi-Fi events for this day.</span>
                         ) : (

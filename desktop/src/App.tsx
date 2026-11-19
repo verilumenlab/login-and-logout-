@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import './App.css';
 import { DeviceInfo, ScreenId, UserSession } from './types';
-import { getNativeDeviceInfo, setUpdateContext, showDesktopNotification } from './api/ipc';
+import {
+  consumePostUpdateRelogin,
+  getNativeDeviceInfo,
+  setUpdateContext,
+  showDesktopNotification,
+} from './api/ipc';
 import { clearLocalSession, getStoredUserSession, logoutUser, rememberDeviceIdentifier } from './api/backend';
+import { clearSavedLogin } from './api/savedLogin';
 import { bindBreakQueueToUser } from './attendance/breakTracker';
 import { bindQueueToUser } from './presence/tracker';
 import { usePresenceTracker, WorkdayCheckRequest } from './presence/usePresenceTracker';
@@ -25,14 +31,9 @@ import { PresenceScreen } from './screens/PresenceScreen';
 import { LeaveScreen } from './screens/LeaveScreen';
 
 export default function App() {
-  const [session, setSession] = useState<UserSession | null>(() => {
-    const stored = getStoredUserSession();
-    if (stored) {
-      bindQueueToUser(stored.user_id);
-      bindBreakQueueToUser(stored.user_id);
-    }
-    return stored;
-  });
+  const [bootReady, setBootReady] = useState(false);
+  const [session, setSession] = useState<UserSession | null>(null);
+  const [requireManualSignIn, setRequireManualSignIn] = useState(false);
   const [device, setDevice] = useState<DeviceInfo | null>(null);
   const [screen, setScreen] = useState<ScreenId>('dashboard');
   const [notice, setNotice] = useState<string | null>(null);
@@ -47,6 +48,38 @@ export default function App() {
       setDevice(info);
       rememberDeviceIdentifier(info.device_id);
     });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const reauth = await consumePostUpdateRelogin();
+      if (cancelled) return;
+
+      if (reauth.required) {
+        await clearLocalSession();
+        await clearSavedLogin();
+        const ver = reauth.toVersion || reauth.version;
+        setRequireManualSignIn(true);
+        setSession(null);
+        setNotice(
+          ver
+            ? `WorkPulse updated to ${ver}. Please sign in again with your work email.`
+            : 'WorkPulse was updated. Please sign in again with your work email.'
+        );
+      } else {
+        const stored = getStoredUserSession();
+        if (stored) {
+          bindQueueToUser(stored.user_id);
+          bindBreakQueueToUser(stored.user_id);
+          setSession(stored);
+        }
+      }
+      setBootReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleSessionExpired = useCallback((reason?: 'expired' | 'blocked') => {
@@ -74,6 +107,7 @@ export default function App() {
   const handleLogin = (newSession: UserSession) => {
     bindQueueToUser(newSession.user_id);
     bindBreakQueueToUser(newSession.user_id);
+    setRequireManualSignIn(false);
     setNotice(null);
     setScreen('dashboard');
     setSession(newSession);
@@ -194,8 +228,23 @@ export default function App() {
     }
   }, [workdayCheck, pendingAppSignOut, recordWorkLogout]);
 
+  if (!bootReady) {
+    return (
+      <div className="app-shell" style={{ display: 'grid', placeItems: 'center', minHeight: '100vh' }}>
+        <p style={{ color: '#64748b', fontSize: 14 }}>Starting WorkPulse…</p>
+      </div>
+    );
+  }
+
   if (!session) {
-    return <LoginScreen device={device} onLoginSuccess={handleLogin} notice={notice} />;
+    return (
+      <LoginScreen
+        device={device}
+        onLoginSuccess={handleLogin}
+        notice={notice}
+        requireManualSignIn={requireManualSignIn}
+      />
+    );
   }
 
   return (

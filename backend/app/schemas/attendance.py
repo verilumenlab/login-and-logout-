@@ -102,6 +102,25 @@ class AttendanceBreakResponse(BaseModel):
     client_event_id: str | None = None
 
 
+class AdminBreakUpdateRequest(BaseModel):
+    """Admin-only keep / edit of an attendance break."""
+
+    action: str = Field(..., pattern="^(keep|update)$")
+    break_type: BreakType | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    reason: str | None = Field(None, max_length=255)
+    notes: str | None = Field(None, max_length=500)
+
+
+class AdminBreakDeleteResponse(BaseModel):
+    ok: bool = True
+    message: str
+    attendance_day_id: uuid.UUID
+    total_break_minutes: int = 0
+    break_count: int = 0
+
+
 class AttendanceAdjustmentCreateRequest(BaseModel):
     attendance_day_id: uuid.UUID
     adjustment_type: AdjustmentType

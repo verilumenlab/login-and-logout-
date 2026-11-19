@@ -3,12 +3,15 @@ const path = require('node:path');
 const native = require('./native.cjs');
 const powerPresence = require('./power-presence.cjs');
 const updater = require('./updater.cjs');
+const sessionReset = require('./session-reset.cjs');
 
 const isDev = !app.isPackaged;
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
 let hidToTrayNoticeShown = false;
+/** After an update, force the login window open (do not start hidden). */
+let forceShowForRelogin = false;
 
 // One process only — reopening the shortcut brings back the background instance.
 const gotLock = app.requestSingleInstanceLock();
@@ -295,6 +298,7 @@ function registerIpc() {
       return { ok: false, reason: String(err) };
     }
   });
+  ipcMain.handle('wp:consumePostUpdateRelogin', async () => sessionReset.consumeReloginRequirement());
 }
 
 if (gotLock) {
@@ -302,14 +306,20 @@ if (gotLock) {
     registerIpc();
     powerPresence.registerPowerMonitor();
     enableStartWithWindows();
+
+    const reauth = await sessionReset.enforceReloginOnVersionChange(updater.readPkgVersion());
+    forceShowForRelogin = Boolean(reauth?.required);
+
     updater.startUpdater({
       channel: process.env.VITE_RELEASE_CHANNEL || 'production',
     });
     createWindow();
     createTray();
 
-    // Launch hidden after Windows login / shortcut with --hidden.
-    if (process.argv.includes('--hidden')) {
+    // After update: always show login. Otherwise honor --hidden startup.
+    if (forceShowForRelogin) {
+      showMainWindow();
+    } else if (process.argv.includes('--hidden')) {
       if (mainWindow && !mainWindow.isDestroyed()) {
         hideToTray(mainWindow);
       }

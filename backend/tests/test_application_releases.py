@@ -277,17 +277,12 @@ async def test_pause_hides_feed(client: AsyncClient, release_env):
     pub = await client.post(f"/api/v1/releases/{rid}/publish", headers=headers)
     assert pub.status_code == 200
 
-    feed = await client.get(
-        "/api/v1/updates/windows/production/latest.yml",
-        headers=release_env["emp_headers"],
-    )
+    # Feed is public so electron-updater can check without a login race.
+    feed = await client.get("/api/v1/updates/windows/production/latest.yml")
     assert feed.status_code == 200
 
     pause = await client.post(f"/api/v1/releases/{rid}/pause", headers=headers)
     assert pause.status_code == 200
 
-    feed2 = await client.get(
-        "/api/v1/updates/windows/production/latest.yml",
-        headers=release_env["emp_headers"],
-    )
+    feed2 = await client.get("/api/v1/updates/windows/production/latest.yml")
     assert feed2.status_code == 404

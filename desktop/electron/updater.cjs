@@ -10,12 +10,25 @@ const path = require('node:path');
 const fs = require('node:fs');
 const native = require('./native.cjs');
 const runtimeConfig = require('./runtime-config.cjs');
+const sessionReset = require('./session-reset.cjs');
 
 let checkTimer = null;
+let retryTimer = null;
 let lastInfo = null;
 let forceUpdate = false;
 let currentDeviceId = null;
 let updateChannel = runtimeConfig.RELEASE_CHANNEL || 'production';
+let eventsWired = false;
+let ipcRegistered = false;
+
+async function installUpdateAndRequireRelogin() {
+  const toVersion = lastInfo?.version || null;
+  await sessionReset.prepareReloginBeforeUpdate({
+    fromVersion: readPkgVersion(),
+    toVersion,
+  });
+  autoUpdater.quitAndInstall(false, true);
+}
 
 function readPkgVersion() {
   try {
@@ -90,6 +103,7 @@ async function configureUpdater() {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.allowDowngrade = false;
+  // Feed itself is public; still attach token when present for reporting continuity.
   autoUpdater.requestHeaders = await authHeaders();
   autoUpdater.setFeedURL({
     provider: 'generic',
@@ -97,7 +111,17 @@ async function configureUpdater() {
   });
 }
 
+function scheduleRetry(ms = 45000) {
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = setTimeout(() => {
+    checkForUpdates({ silent: true });
+  }, ms);
+}
+
 function wireEvents() {
+  if (eventsWired) return;
+  eventsWired = true;
+
   autoUpdater.on('checking-for-update', () => {
     broadcast('wp:update-status', { state: 'checking' });
   });
@@ -136,13 +160,11 @@ function wireEvents() {
       mandatory: true,
     });
     report('installing', { to_version: info.version }).catch(() => undefined);
-    // Replace the installed build automatically (NSIS upgrades in place; old files removed).
+    // Close app, install new build, then require email sign-in on next launch.
     setTimeout(() => {
-      try {
-        autoUpdater.quitAndInstall(false, true);
-      } catch (err) {
+      installUpdateAndRequireRelogin().catch((err) => {
         console.warn('[updater] quitAndInstall failed:', err);
-      }
+      });
     }, 2000);
   });
 
@@ -153,6 +175,7 @@ function wireEvents() {
       message: String(err?.message || err || 'Update check failed'),
     });
     report('failed', { error: String(err?.message || err) }).catch(() => undefined);
+    scheduleRetry(60000);
   });
 }
 
@@ -174,6 +197,7 @@ async function checkForUpdates({ silent = true } = {}) {
       });
     }
     console.warn('[updater] check failed (app continues):', err?.message || err);
+    scheduleRetry(60000);
     return { ok: false, error: String(err?.message || err) };
   }
 }
@@ -181,21 +205,24 @@ async function checkForUpdates({ silent = true } = {}) {
 async function refreshPolicy() {
   try {
     const headers = await authHeaders();
-    if (!headers.Authorization) return;
+    // Policy needs auth; feed check does not. Keep default interval if offline/unsigned.
+    if (!headers.Authorization) return false;
     const res = await fetch(`${apiBase()}/updates/policy?channel=${encodeURIComponent(updateChannel)}`, {
       headers,
     });
-    if (!res.ok) return;
+    if (!res.ok) return false;
     const policy = await res.json();
     forceUpdate = Boolean(policy.force_update);
     autoUpdater.autoDownload = policy.auto_download !== false;
-    const minutes = Number(policy.check_interval_minutes) || 240;
+    const minutes = Number(policy.check_interval_minutes) || 60;
     if (checkTimer) clearInterval(checkTimer);
     checkTimer = setInterval(() => {
       checkForUpdates({ silent: true });
     }, Math.max(15, minutes) * 60 * 1000);
+    return true;
   } catch (err) {
     console.warn('[updater] policy fetch failed:', err?.message || err);
+    return false;
   }
 }
 
@@ -205,11 +232,14 @@ function setSessionContext({ deviceId, channel } = {}) {
 }
 
 function registerUpdaterIpc() {
+  if (ipcRegistered) return;
+  ipcRegistered = true;
+
   ipcMain.handle('wp:checkForUpdates', async () => checkForUpdates({ silent: false }));
   ipcMain.handle('wp:installUpdateNow', async () => {
     try {
       await report('installing', { to_version: lastInfo?.version });
-      autoUpdater.quitAndInstall(false, true);
+      await installUpdateAndRequireRelogin();
       return { ok: true };
     } catch (err) {
       await report('failed', { error: String(err?.message || err) });
@@ -219,7 +249,9 @@ function registerUpdaterIpc() {
   ipcMain.handle('wp:getAppVersion', async () => readPkgVersion());
   ipcMain.handle('wp:setUpdateContext', async (_e, ctx) => {
     setSessionContext(ctx || {});
+    // After employee signs in: refresh policy and check immediately (was the main miss).
     await refreshPolicy();
+    await checkForUpdates({ silent: true });
     return { ok: true };
   });
 }
@@ -228,13 +260,17 @@ function startUpdater({ deviceId, channel } = {}) {
   setSessionContext({ deviceId, channel });
   wireEvents();
   registerUpdaterIpc();
-  // Initial delayed check so login token can be stored first
+  // Feed is public — check soon after launch, then again after typical login time.
+  setTimeout(() => {
+    checkForUpdates({ silent: true });
+  }, 5000);
   setTimeout(() => {
     refreshPolicy().then(() => checkForUpdates({ silent: true }));
-  }, 8000);
+  }, 20000);
+  if (checkTimer) clearInterval(checkTimer);
   checkTimer = setInterval(() => {
     checkForUpdates({ silent: true });
-  }, 240 * 60 * 1000);
+  }, 60 * 60 * 1000);
 }
 
 module.exports = {

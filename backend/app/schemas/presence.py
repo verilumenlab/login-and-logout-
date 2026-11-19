@@ -49,6 +49,20 @@ class PresenceEventOut(BaseModel):
     attendance_action: str
     # Optional label for break rows (e.g. "LUNCH · AUTO_IDLE · 45m").
     detail: str | None = None
+    # Present on BREAK_START / BREAK_END so admins can keep/remove that break.
+    break_id: uuid.UUID | None = None
+
+
+class PresenceBreakOut(BaseModel):
+    id: uuid.UUID
+    break_type: str
+    start_time: datetime
+    end_time: datetime | None = None
+    duration_minutes: int | None = None
+    source: str
+    reason: str | None = None
+    is_paid: bool = False
+    admin_kept: bool = False
 
 
 class PresenceDay(BaseModel):
@@ -63,6 +77,7 @@ class PresenceDay(BaseModel):
     first_wifi_connected_at: datetime | None = None
     wifi_networks: list[str] = Field(default_factory=list)
     events: list[PresenceEventOut] = Field(default_factory=list)
+    breaks: list[PresenceBreakOut] = Field(default_factory=list)
     # Why hours stopped (office Wi-Fi leave, sleep, shutdown, etc.)
     logout_note: str | None = None
     logout_reason: str | None = None  # office_wifi | sleep | shutdown | eod_no_office_wifi | …

@@ -16,11 +16,18 @@ interface LoginScreenProps {
   device: DeviceInfo | null;
   onLoginSuccess: (session: UserSession) => void;
   notice?: string | null;
+  /** After app update: skip saved-password auto sign-in; employee must enter email. */
+  requireManualSignIn?: boolean;
 }
 
 type AuthMode = 'login' | 'forgot' | 'reset';
 
-export const LoginScreen: React.FC<LoginScreenProps> = ({ device, onLoginSuccess, notice }) => {
+export const LoginScreen: React.FC<LoginScreenProps> = ({
+  device,
+  onLoginSuccess,
+  notice,
+  requireManualSignIn = false,
+}) => {
   const [mode, setMode] = useState<AuthMode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -39,6 +46,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ device, onLoginSuccess
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      if (requireManualSignIn) {
+        await clearSavedLogin();
+        if (cancelled) return;
+        setEmail('');
+        setPassword('');
+        setSaveLogin(false);
+        setHasSavedLogin(false);
+        setCredsReady(true);
+        return;
+      }
       const saved = await getSavedLogin();
       if (cancelled) return;
       if (saved) {
@@ -52,7 +69,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ device, onLoginSuccess
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [requireManualSignIn]);
 
   const signIn = async (emailValue: string, passwordValue: string, remember: boolean) => {
     if (!device) {
@@ -81,13 +98,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ device, onLoginSuccess
   };
 
   useEffect(() => {
+    if (requireManualSignIn) return;
     if (mode !== 'login') return;
     if (!credsReady || !device || !hasSavedLogin || autoLoginTried.current) return;
     if (!email.trim() || !password) return;
     autoLoginTried.current = true;
     void signIn(email, password, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, credsReady, device, hasSavedLogin, email, password]);
+  }, [mode, credsReady, device, hasSavedLogin, email, password, requireManualSignIn]);
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

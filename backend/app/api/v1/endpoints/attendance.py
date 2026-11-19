@@ -39,6 +39,8 @@ from app.models.attendance import (
 from app.models.auth import AuditLog, User
 from app.models.employee import EmployeeProfile, ManagerAssignment
 from app.schemas.attendance import (
+    AdminBreakDeleteResponse,
+    AdminBreakUpdateRequest,
     AttendanceAdjustmentCreateRequest,
     AttendanceAdjustmentResponse,
     AttendanceAdjustmentReviewRequest,
@@ -653,6 +655,140 @@ async def trigger_attendance_recalculation(
         audit_reason="Administrative Recalculation Request",
     )
     return recalc_day
+
+
+@router.post("/breaks/{break_id}/admin", response_model=AttendanceBreakResponse)
+async def admin_keep_or_update_break(
+    break_id: uuid.UUID,
+    payload: AdminBreakUpdateRequest,
+    current_user: Annotated[User, Depends(require_role("Super Admin", "Administrator", "Admin"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> AttendanceBreak:
+    """Admin only: keep (confirm) or edit a recorded break time."""
+    res = await db.execute(
+        select(AttendanceBreak)
+        .options(selectinload(AttendanceBreak.attendance_day))
+        .where(AttendanceBreak.id == break_id)
+    )
+    br = res.scalars().first()
+    if not br:
+        raise HTTPException(status_code=404, detail="Break not found")
+
+    action = (payload.action or "").strip().lower()
+    if action == "keep":
+        note = (payload.notes or payload.reason or "Kept by admin").strip()
+        stamp = f"Admin kept · {current_user.email}"
+        br.reason = f"{stamp}" + (f" · {note}" if note and note.lower() != "kept by admin" else "")
+        if len(br.reason) > 255:
+            br.reason = br.reason[:255]
+    elif action == "update":
+        if payload.break_type is not None:
+            br.break_type = payload.break_type
+            br.is_paid = payload.break_type in (BreakType.COFFEE, BreakType.MEETING)
+        if payload.start_time is not None:
+            br.start_time = ensure_utc(payload.start_time) or payload.start_time
+        if payload.end_time is not None:
+            finalize_break(br, payload.end_time)
+        elif br.end_time is not None and payload.start_time is not None:
+            # Recalculate duration after start-only edit.
+            finalize_break(br, br.end_time)
+        if payload.reason is not None:
+            br.reason = payload.reason.strip()[:255] or None
+        elif payload.notes:
+            br.reason = f"Admin edit · {current_user.email} · {payload.notes.strip()}"[:255]
+    else:
+        raise HTTPException(status_code=400, detail="action must be keep or update")
+
+    day_id = br.attendance_day_id
+    db.add(
+        AuditLog(
+            organization_id=current_user.organization_id,
+            user_id=current_user.id,
+            action=f"attendance.break.{action}",
+            entity_type="attendance_break",
+            entity_id=str(br.id),
+            diff_json={
+                "break_id": str(br.id),
+                "attendance_day_id": str(day_id),
+                "action": action,
+                "admin": current_user.email,
+                "notes": payload.notes,
+            },
+        )
+    )
+    await db.flush()
+    await recalculate_attendance_day(
+        db,
+        day_id,
+        audit_actor_user_id=current_user.id,
+        audit_reason=f"Admin break {action}",
+        commit=False,
+    )
+    await db.commit()
+    await db.refresh(br)
+    return br
+
+
+@router.delete("/breaks/{break_id}", response_model=AdminBreakDeleteResponse)
+async def admin_remove_break(
+    break_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_role("Super Admin", "Administrator", "Admin"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    notes: str | None = Query(None, max_length=500),
+) -> AdminBreakDeleteResponse:
+    """Admin only: permanently remove a break so it no longer counts on the day."""
+    res = await db.execute(select(AttendanceBreak).where(AttendanceBreak.id == break_id))
+    br = res.scalars().first()
+    if not br:
+        raise HTTPException(status_code=404, detail="Break not found")
+
+    day_id = br.attendance_day_id
+    snapshot = {
+        "break_id": str(br.id),
+        "attendance_day_id": str(day_id),
+        "break_type": br.break_type.value if hasattr(br.break_type, "value") else str(br.break_type),
+        "start_time": br.start_time.isoformat() if br.start_time else None,
+        "end_time": br.end_time.isoformat() if br.end_time else None,
+        "duration_minutes": br.duration_minutes,
+        "source": br.source,
+        "admin": current_user.email,
+        "notes": notes,
+    }
+    await db.delete(br)
+    db.add(
+        AuditLog(
+            organization_id=current_user.organization_id,
+            user_id=current_user.id,
+            action="attendance.break.remove",
+            entity_type="attendance_break",
+            entity_id=str(break_id),
+            diff_json=snapshot,
+        )
+    )
+    await db.flush()
+    day = await recalculate_attendance_day(
+        db,
+        day_id,
+        audit_actor_user_id=current_user.id,
+        audit_reason="Admin removed break",
+        commit=False,
+    )
+    await db.commit()
+    break_count = (
+        (
+            await db.execute(
+                select(func.count()).select_from(AttendanceBreak).where(AttendanceBreak.attendance_day_id == day_id)
+            )
+        ).scalar_one()
+        or 0
+    )
+    return AdminBreakDeleteResponse(
+        ok=True,
+        message="Break removed",
+        attendance_day_id=day_id,
+        total_break_minutes=int(day.total_break_minutes or 0),
+        break_count=int(break_count),
+    )
 
 
 # ============================================================================

@@ -565,6 +565,19 @@ export interface PresenceEvent {
   ssid: string | null;
   attendance_action: 'CLOCK_IN' | 'CLOCK_OUT' | 'NONE' | string;
   detail?: string | null;
+  break_id?: string | null;
+}
+
+export interface PresenceBreak {
+  id: string;
+  break_type: string;
+  start_time: string;
+  end_time: string | null;
+  duration_minutes: number | null;
+  source: string;
+  reason?: string | null;
+  is_paid?: boolean;
+  admin_kept?: boolean;
 }
 
 export interface PresenceDay {
@@ -579,6 +592,7 @@ export interface PresenceDay {
   first_wifi_connected_at: string | null;
   wifi_networks: string[];
   events: PresenceEvent[];
+  breaks?: PresenceBreak[];
   logout_note?: string | null;
   logout_reason?: string | null;
 }
@@ -1238,6 +1252,36 @@ export class ApiClient {
       method: 'POST',
       body: JSON.stringify({ notes }),
     });
+  }
+
+  /** Admin only: keep (confirm) or edit a break record. */
+  async adminBreakAction(
+    breakId: string,
+    payload: {
+      action: 'keep' | 'update';
+      break_type?: string;
+      start_time?: string;
+      end_time?: string;
+      reason?: string;
+      notes?: string;
+    }
+  ): Promise<PresenceBreak> {
+    return this.request<PresenceBreak>(`/attendance/breaks/${breakId}/admin`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  /** Admin only: remove a break so it no longer counts. */
+  async adminRemoveBreak(breakId: string, notes?: string): Promise<{
+    ok: boolean;
+    message: string;
+    attendance_day_id: string;
+    total_break_minutes: number;
+    break_count: number;
+  }> {
+    const qs = notes ? `?notes=${encodeURIComponent(notes)}` : '';
+    return this.request(`/attendance/breaks/${breakId}${qs}`, { method: 'DELETE' });
   }
 
   // --- Leaves ---

@@ -44,11 +44,14 @@ async def _employee_id_for_user(db: AsyncSession, user: User) -> uuid.UUID | Non
 @router.get("/windows/{channel}/latest.yml")
 async def windows_latest_yml(
     channel: str,
-    current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ) -> PlainTextResponse:
-    """electron-updater generic provider feed — published releases only."""
-    _ = current_user
+    """
+    electron-updater generic provider feed — published releases only.
+
+    Public (no auth): the desktop updater must read this before/without a session.
+    Only the currently published channel package is exposed.
+    """
     release = await release_service.get_published_release(db, channel)
     if not release:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No published Windows release")
@@ -69,12 +72,16 @@ async def windows_latest_yml(
 async def windows_download(
     channel: str,
     filename: str,
-    current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse | PlainTextResponse:
-    """Download a published Windows update artifact (setup / blockmap)."""
+    """
+    Download a published Windows update artifact (setup / blockmap).
+
+    Public read of the published package so electron-updater can install without
+    racing the employee login token.
+    """
     if filename.lower() in {"latest.yml", "latest.yaml"}:
-        return await windows_latest_yml(channel=channel, current_user=current_user, db=db)
+        return await windows_latest_yml(channel=channel, db=db)
 
     release, file_row, path = await release_service.get_file_for_download(
         db, channel_name=channel, filename=filename
@@ -83,8 +90,8 @@ async def windows_download(
         db,
         event_type="download",
         message=f"Downloaded {filename}",
-        organization_id=current_user.organization_id,
-        actor_user_id=current_user.id,
+        organization_id=None,
+        actor_user_id=None,
         release_id=release.id,
         details={"filename": filename, "sha256": file_row.sha256, "channel": channel},
     )
@@ -100,10 +107,9 @@ async def windows_download(
 @router.get("/windows/latest.yml")
 async def windows_latest_yml_alias(
     channel: str = Query("production"),
-    current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ) -> PlainTextResponse:
-    return await windows_latest_yml(channel=channel, current_user=current_user, db=db)
+    return await windows_latest_yml(channel=channel, db=db)
 
 
 @router.post("/check", response_model=UpdateCheckResponse)

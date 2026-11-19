@@ -47,6 +47,7 @@ from app.models.presence import (
 )
 from app.models.schedule import Holiday
 from app.schemas.presence import (
+    PresenceBreakOut,
     PresenceDay,
     PresenceEventIn,
     PresenceEventOut,
@@ -1428,10 +1429,30 @@ async def get_presence_days(
             row.break_count = len(breaks)
             row.total_break_minutes = att.total_break_minutes or 0
             # Merge break start/end into the same timeline managers see under Attendance history.
+            break_rows: list[PresenceBreakOut] = []
             for br in breaks:
                 btype = br.break_type.value if hasattr(br.break_type, "value") else str(br.break_type)
                 source = br.source or "AUTO"
                 start_at = ensure_utc(br.start_time) or now
+                end_at = ensure_utc(br.end_time) if br.end_time is not None else None
+                mins = br.duration_minutes
+                if mins is None and end_at is not None:
+                    mins = max(0, int((end_at - start_at).total_seconds() // 60))
+                reason = br.reason
+                admin_kept = bool(reason and "admin kept" in reason.lower())
+                break_rows.append(
+                    PresenceBreakOut(
+                        id=br.id,
+                        break_type=btype,
+                        start_time=start_at,
+                        end_time=end_at,
+                        duration_minutes=mins,
+                        source=source,
+                        reason=reason,
+                        is_paid=bool(br.is_paid),
+                        admin_kept=admin_kept,
+                    )
+                )
                 row.events.append(
                     PresenceEventOut(
                         event_type="BREAK_START",
@@ -1439,13 +1460,10 @@ async def get_presence_days(
                         ssid=None,
                         attendance_action="NONE",
                         detail=f"{btype} · {source}",
+                        break_id=br.id,
                     )
                 )
-                if br.end_time is not None:
-                    end_at = ensure_utc(br.end_time) or now
-                    mins = br.duration_minutes
-                    if mins is None:
-                        mins = max(0, int((end_at - start_at).total_seconds() // 60))
+                if end_at is not None:
                     row.events.append(
                         PresenceEventOut(
                             event_type="BREAK_END",
@@ -1453,8 +1471,10 @@ async def get_presence_days(
                             ssid=None,
                             attendance_action="NONE",
                             detail=f"{btype} · {mins}m",
+                            break_id=br.id,
                         )
                     )
+            row.breaks = break_rows
             row.events.sort(key=lambda e: ensure_utc(e.occurred_at) or now)
         if att is not None and att.shift_start is not None:
             att = await _autoclose_stale_open_day(db, att, now=now)

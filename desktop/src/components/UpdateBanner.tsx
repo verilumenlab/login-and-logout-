@@ -57,7 +57,8 @@ export function UpdateBanner() {
       {status.state === 'ready' && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
           <p style={{ margin: 0 }}>
-            Update <strong>{status.version}</strong> is ready to install.
+            Update <strong>{status.version}</strong> is ready. The app will close, install, then ask you to
+            sign in again with your work email.
           </p>
           <button
             type="button"
@@ -74,7 +75,7 @@ export function UpdateBanner() {
               cursor: 'pointer',
             }}
           >
-            {installing ? 'Restarting…' : 'Restart & update'}
+            {installing ? 'Closing…' : 'Close & update'}
           </button>
         </div>
       )}

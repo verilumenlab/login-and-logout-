@@ -61,8 +61,23 @@ type WorkpulseBridge = {
   checkForUpdates?: () => Promise<unknown>;
   installUpdateNow?: () => Promise<{ ok: boolean; error?: string }>;
   getAppVersion?: () => Promise<string>;
+  consumePostUpdateRelogin?: () => Promise<{
+    required: boolean;
+    version?: string | null;
+    fromVersion?: string | null;
+    toVersion?: string | null;
+    reason?: string | null;
+  }>;
   setUpdateContext?: (ctx: { deviceId?: string | null; channel?: string }) => Promise<unknown>;
   onUpdateStatus?: (callback: (payload: UpdateStatusPayload) => void) => () => void;
+};
+
+export type PostUpdateRelogin = {
+  required: boolean;
+  version?: string | null;
+  fromVersion?: string | null;
+  toVersion?: string | null;
+  reason?: string | null;
 };
 
 declare global {
@@ -314,6 +329,18 @@ export async function getAppVersion(): Promise<string> {
     }
   }
   return '0.1.0';
+}
+
+/** After a new version install: true once, then clears the flag. */
+export async function consumePostUpdateRelogin(): Promise<PostUpdateRelogin> {
+  const wp = bridge();
+  if (!wp?.consumePostUpdateRelogin) return { required: false };
+  try {
+    return (await wp.consumePostUpdateRelogin()) || { required: false };
+  } catch (e) {
+    console.warn('[IPC] consumePostUpdateRelogin failed:', e);
+    return { required: false };
+  }
 }
 
 export async function setUpdateContext(ctx: {

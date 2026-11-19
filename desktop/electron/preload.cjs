@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('workpulse', {
   checkForUpdates: () => ipcRenderer.invoke('wp:checkForUpdates'),
   installUpdateNow: () => ipcRenderer.invoke('wp:installUpdateNow'),
   getAppVersion: () => ipcRenderer.invoke('wp:getAppVersion'),
+  consumePostUpdateRelogin: () => ipcRenderer.invoke('wp:consumePostUpdateRelogin'),
   setUpdateContext: (ctx) => ipcRenderer.invoke('wp:setUpdateContext', ctx),
   onUpdateStatus: (callback) => {
     const handler = (_event, payload) => callback(payload);
