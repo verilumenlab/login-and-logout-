@@ -152,9 +152,30 @@ export const PresenceScreen: React.FC<PresenceScreenProps> = ({ tracker, dataVer
             )}
             {days.map((d) => {
               const isOpen = expanded === d.work_date;
+              // Guard against false midnight logouts (11:59 PM) that inflate hours to ~14h.
+              const logoutMs = d.last_logout ? new Date(d.last_logout).getTime() : NaN;
+              const loginMs = d.first_login ? new Date(d.first_login).getTime() : NaN;
+              const logoutLocal = Number.isFinite(logoutMs) ? new Date(logoutMs) : null;
+              const looksLikeMidnightCap =
+                !d.is_logged_in &&
+                logoutLocal != null &&
+                Number.isFinite(loginMs) &&
+                d.worked_minutes >= 12 * 60 &&
+                logoutLocal.getHours() === 23 &&
+                logoutLocal.getMinutes() >= 58;
+              const officeEndMs = looksLikeMidnightCap
+                ? new Date(`${d.work_date}T18:30:00`).getTime()
+                : NaN;
+              const cappedMinutes =
+                looksLikeMidnightCap && Number.isFinite(officeEndMs)
+                  ? Math.max(0, (officeEndMs - loginMs) / 60000)
+                  : null;
               const minutes = d.is_logged_in && d.first_login
                 ? (Date.now() - new Date(d.first_login).getTime()) / 60000
-                : d.worked_minutes;
+                : (cappedMinutes ?? d.worked_minutes);
+              const logoutLabel = looksLikeMidnightCap && Number.isFinite(officeEndMs)
+                ? formatTime(new Date(officeEndMs).toISOString())
+                : formatTime(d.last_logout);
               return (
                 <React.Fragment key={d.work_date}>
                   <tr className="clickable" onClick={() => setExpanded(isOpen ? null : d.work_date)}>
@@ -163,7 +184,7 @@ export const PresenceScreen: React.FC<PresenceScreenProps> = ({ tracker, dataVer
                       {formatDay(d.work_date)}
                     </td>
                     <td>{formatTime(d.first_login)}</td>
-                    <td>{d.is_logged_in ? <span className="badge badge-success">Active</span> : formatTime(d.last_logout)}</td>
+                    <td>{d.is_logged_in ? <span className="badge badge-success">Active</span> : logoutLabel}</td>
                     <td className="num">{d.first_login ? formatDuration(minutes) : '—'}</td>
                   </tr>
                   {isOpen && (

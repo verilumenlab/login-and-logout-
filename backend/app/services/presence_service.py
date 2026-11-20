@@ -708,19 +708,21 @@ def _fallback_eod_without_office_wifi(
     """
     from app.core.office_policy import OFFICE_END
 
-    if not office_ssids:
-        return None, None
-
     now = ensure_utc(now) or datetime.now(UTC)
     eod = datetime.combine(work_date, OFFICE_END, tzinfo=org_zone()).astimezone(UTC)
     # Only after office end (or for a past work date).
     if now < eod:
         return None, None
 
-    # Open session past EOD, or logout stamped at/near midnight.
-    open_or_midnight = shift_end is None or shift_end >= day_end - timedelta(minutes=1)
+    shift_end_utc = ensure_utc(shift_end) if shift_end is not None else None
+    # Open session past EOD, or logout stamped at/near midnight (shows as 11:59 PM + ~14h).
+    open_or_midnight = shift_end_utc is None or shift_end_utc >= day_end - timedelta(minutes=1)
     if not open_or_midnight:
         return None, None
+
+    # No office SSIDs configured: still cap false midnight days at office end.
+    if not office_ssids:
+        return eod, "eod_no_office_wifi"
 
     evening_start = _evening_sleep_cutoff_utc(work_date)
     for sig in signals:
@@ -965,13 +967,40 @@ async def _autoclose_stale_open_day(
         last_in=last_in,
         before=now,
     )
-    # If no evening power-off signal exists, fall back to local day end.
+    # If no evening power-off signal exists, do NOT stamp 11:59 PM (that inflates hours
+    # to ~14h). Prefer office end (6:30 PM) when they were not on office Wi-Fi.
     if note == "Auto-closed: no logout was recorded":
-        _, day_end = local_day_bounds(day.work_date)
-        close_at = day_end - timedelta(seconds=1)
+        from app.core.office_policy import OFFICE_END
+
+        emp = await db.get(EmployeeProfile, day.employee_id)
+        office_ssids = await _office_ssids(db, emp.organization_id) if emp is not None else set()
+        day_start, day_end = local_day_bounds(day.work_date)
+        signals = (
+            await db.execute(
+                select(PresenceEvent).where(
+                    PresenceEvent.employee_id == day.employee_id,
+                    PresenceEvent.occurred_at >= day_start,
+                    PresenceEvent.occurred_at < day_end,
+                )
+            )
+        ).scalars().all()
+        eod_at, eod_reason = _fallback_eod_without_office_wifi(
+            list(signals),
+            work_date=day.work_date,
+            office_ssids=office_ssids,
+            shift_end=None,
+            day_end=day_end,
+            now=now,
+        )
+        if eod_at is not None:
+            close_at = eod_at
+            note = _logout_note_for_reason(eod_reason or "eod_no_office_wifi")
+        else:
+            # Still avoid midnight: use office end as a safe cap for past open days.
+            close_at = datetime.combine(day.work_date, OFFICE_END, tzinfo=org_zone()).astimezone(UTC)
+            note = "Auto-closed at office end (no logout recorded)"
         if close_at < last_in:
             close_at = last_in
-        note = "Auto-closed at end of work day (no logout recorded)"
     await _add_attendance_event(
         db,
         day,
@@ -980,6 +1009,7 @@ async def _autoclose_stale_open_day(
         f"presence:autoclose-dayend:{day.id}"[:100],
         note,
     )
+    await recalculate_attendance_day(db, day.id, commit=False)
     await db.refresh(day, attribute_names=["events", "shift_start", "shift_end", "total_work_minutes"])
     return day
 
@@ -1500,6 +1530,27 @@ async def get_presence_days(
             from app.core.office_policy import OFFICE_END as _OFFICE_END_DAY
 
             eod_day = datetime.combine(work_date, _OFFICE_END_DAY, tzinfo=org_zone()).astimezone(UTC)
+            day_end_utc = local_day_bounds(work_date)[1]
+            # Past days stamped at 11:59 PM (~14h from morning login) are almost always a
+            # missing-logout autoclose. Cap at office end when no office Wi-Fi after 6 PM.
+            logout_utc = ensure_utc(logout_for_hours) if logout_for_hours is not None else None
+            if (
+                work_date < local_work_date(now)
+                and logout_utc is not None
+                and logout_utc >= day_end_utc - timedelta(minutes=1)
+                and leave_at is None
+            ):
+                leave_at, leave_reason = _fallback_eod_without_office_wifi(
+                    day_events,
+                    work_date=work_date,
+                    office_ssids=office_ssids,
+                    shift_end=None,
+                    day_end=day_end_utc,
+                    now=now,
+                )
+                if leave_at is not None:
+                    logout_for_hours = leave_at
+
             if now < eod_day and leave_reason == "eod_no_office_wifi":
                 leave_at, leave_reason = None, None
             if now < eod_day and logout_for_hours is not None and logout_for_hours > now:
@@ -1708,6 +1759,23 @@ async def get_team_presence(
             from app.core.office_policy import OFFICE_END as _OFFICE_END
 
             eod_today = datetime.combine(work_date, _OFFICE_END, tzinfo=org_zone()).astimezone(UTC)
+            logout_utc = ensure_utc(logout_for_hours) if logout_for_hours is not None else None
+            if (
+                work_date < local_work_date(now)
+                and logout_utc is not None
+                and logout_utc >= day_end - timedelta(minutes=1)
+                and leave_at is None
+            ):
+                leave_at, leave_reason = _fallback_eod_without_office_wifi(
+                    emp_signals,
+                    work_date=work_date,
+                    office_ssids=office_ssids,
+                    shift_end=None,
+                    day_end=day_end,
+                    now=now,
+                )
+                if leave_at is not None:
+                    logout_for_hours = leave_at
             if now < eod_today and leave_reason == "eod_no_office_wifi":
                 leave_at, leave_reason = None, None
             if now < eod_today and logout_for_hours is not None and logout_for_hours > now:
