@@ -1542,24 +1542,16 @@ async def get_presence_days(
 
             eod_day = datetime.combine(work_date, _OFFICE_END_DAY, tzinfo=org_zone()).astimezone(UTC)
             day_end_utc = local_day_bounds(work_date)[1]
-            # Past days stamped at 11:59 PM (~14h from morning login) are almost always a
-            # missing-logout autoclose. Cap at office end when no office Wi-Fi after 6 PM.
+            # Past days stamped at 11:59 PM (~14h) are the day-cap autoclose, never a real
+            # logout. Always show office end (6:30 PM) unless a real evening leave was inferred.
             logout_utc = ensure_utc(logout_for_hours) if logout_for_hours is not None else None
             if (
                 work_date < local_work_date(now)
                 and logout_utc is not None
                 and logout_utc >= day_end_utc - timedelta(minutes=1)
-                and leave_at is None
             ):
-                leave_at, leave_reason = _fallback_eod_without_office_wifi(
-                    day_events,
-                    work_date=work_date,
-                    office_ssids=office_ssids,
-                    shift_end=None,
-                    day_end=day_end_utc,
-                    now=now,
-                )
-                if leave_at is not None:
+                if leave_at is None or leave_at >= day_end_utc - timedelta(minutes=1):
+                    leave_at, leave_reason = eod_day, "eod_no_office_wifi"
                     logout_for_hours = leave_at
 
             if now < eod_day and leave_reason == "eod_no_office_wifi":
@@ -1775,17 +1767,9 @@ async def get_team_presence(
                 work_date < local_work_date(now)
                 and logout_utc is not None
                 and logout_utc >= day_end - timedelta(minutes=1)
-                and leave_at is None
             ):
-                leave_at, leave_reason = _fallback_eod_without_office_wifi(
-                    emp_signals,
-                    work_date=work_date,
-                    office_ssids=office_ssids,
-                    shift_end=None,
-                    day_end=day_end,
-                    now=now,
-                )
-                if leave_at is not None:
+                if leave_at is None or leave_at >= day_end - timedelta(minutes=1):
+                    leave_at, leave_reason = eod_today, "eod_no_office_wifi"
                     logout_for_hours = leave_at
             if now < eod_today and leave_reason == "eod_no_office_wifi":
                 leave_at, leave_reason = None, None
