@@ -375,6 +375,123 @@ async def register_release_package(
     return res.scalars().one()
 
 
+async def replace_release_package_files(
+    db: AsyncSession,
+    *,
+    release_id: uuid.UUID,
+    setup_file: UploadFile,
+    blockmap_file: UploadFile | None = None,
+    latest_yml_file: UploadFile | None = None,
+) -> ApplicationRelease:
+    """Rewrite setup/blockmap/latest.yml for an existing release after ephemeral disk loss."""
+    release = await get_release(db, release_id)
+    channel_name = release.channel.name if release.channel else "production"
+    version = release.version
+
+    setup_bytes = await _read_upload(setup_file, settings.RELEASE_MAX_UPLOAD_BYTES)
+    setup_name = sanitize_release_filename(
+        setup_file.filename or f"WorkPulse-Employee-Setup-{version}.exe"
+    )
+    if not setup_name.lower().endswith(".exe"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Setup package must be a Windows .exe installer",
+        )
+    sha256, sha512 = hash_bytes(setup_bytes)
+
+    dest_dir = release_storage_root() / channel_name / version
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    setup_path = dest_dir / setup_name
+    setup_path.write_bytes(setup_bytes)
+
+    # Drop old file rows; paths on disk may already be gone after a Render redeploy.
+    for old in list(release.files or []):
+        await db.delete(old)
+    await db.flush()
+
+    now = datetime.now(UTC)
+    files: list[ApplicationReleaseFile] = [
+        ApplicationReleaseFile(
+            release_id=release.id,
+            kind="setup",
+            filename=setup_name,
+            storage_path=str(setup_path),
+            content_type="application/vnd.microsoft.portable-executable",
+            size_bytes=len(setup_bytes),
+            sha256=sha256,
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+
+    if blockmap_file and blockmap_file.filename:
+        bm_bytes = await _read_upload(blockmap_file, settings.RELEASE_MAX_UPLOAD_BYTES)
+        bm_name = sanitize_release_filename(blockmap_file.filename)
+        bm_path = dest_dir / bm_name
+        bm_path.write_bytes(bm_bytes)
+        bm_sha, _ = hash_bytes(bm_bytes)
+        files.append(
+            ApplicationReleaseFile(
+                release_id=release.id,
+                kind="blockmap",
+                filename=bm_name,
+                storage_path=str(bm_path),
+                content_type="application/octet-stream",
+                size_bytes=len(bm_bytes),
+                sha256=bm_sha,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    if latest_yml_file and latest_yml_file.filename:
+        yml_text = (await _read_upload(latest_yml_file, 2 * 1024 * 1024)).decode("utf-8")
+    else:
+        yml_text = _build_latest_yml(
+            version=version,
+            setup_filename=setup_name,
+            setup_sha512=sha512,
+            setup_size=len(setup_bytes),
+            release_notes=release.release_notes,
+        )
+    yml_path = dest_dir / "latest.yml"
+    yml_path.write_text(yml_text, encoding="utf-8")
+    yml_sha, _ = hash_bytes(yml_text.encode("utf-8"))
+    files.append(
+        ApplicationReleaseFile(
+            release_id=release.id,
+            kind="latest_yml",
+            filename="latest.yml",
+            storage_path=str(yml_path),
+            content_type="text/yaml",
+            size_bytes=len(yml_text.encode("utf-8")),
+            sha256=yml_sha,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+    for f in files:
+        db.add(f)
+
+    release.package_size = len(setup_bytes)
+    release.sha256 = sha256
+    release.sha512 = sha512
+    release.uploaded_at = now
+    release.updated_at = now
+    await record_event(
+        db,
+        event_type="ci_replace_files",
+        message=f"Release {version} package files replaced on {channel_name}",
+        organization_id=None,
+        actor_user_id=None,
+        release_id=release.id,
+        details={"version": version, "channel": channel_name, "sha256": sha256},
+    )
+    await db.flush()
+    return await get_release(db, release.id)
+
+
 async def list_releases(
     db: AsyncSession,
     *,

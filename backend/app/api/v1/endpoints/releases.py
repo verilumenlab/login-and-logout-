@@ -228,6 +228,43 @@ async def ci_publish_release(
     return ReleaseActionResponse(id=release.id, status=release.status, message="Release published")
 
 
+@router.post("/{release_id}/ci-replace-files", response_model=ReleaseOut)
+async def ci_replace_release_files(
+    release_id: uuid.UUID,
+    auto_publish: Annotated[str | None, Form()] = None,
+    setup_file: UploadFile = File(...),
+    blockmap_file: UploadFile | None = File(None),
+    latest_yml_file: UploadFile | None = File(None),
+    authorization: Annotated[str | None, Header()] = None,
+    db: AsyncSession = Depends(get_db),
+) -> ReleaseOut:
+    """
+    Re-write package files for an existing release (Render ephemeral disk wipe recovery),
+    optionally re-publish in the same request.
+    """
+    _verify_ci_token(authorization)
+    release = await release_service.replace_release_package_files(
+        db,
+        release_id=release_id,
+        setup_file=setup_file,
+        blockmap_file=blockmap_file,
+        latest_yml_file=latest_yml_file,
+    )
+    await db.commit()
+    should_publish = str(auto_publish or "").strip().lower() in {"1", "true", "yes", "on"}
+    if should_publish:
+        release = await release_service.transition_release(
+            db,
+            release_id=release.id,
+            action="publish",
+            actor_user_id=None,
+            organization_id=None,
+        )
+        await db.commit()
+    release = await release_service.get_release(db, release.id)
+    return _to_out(release)
+
+
 @router.post("/{release_id}/approve", response_model=ReleaseActionResponse)
 async def approve_release(
     release_id: uuid.UUID,
