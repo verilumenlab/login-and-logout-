@@ -249,6 +249,40 @@ export async function flushQueue(): Promise<boolean | null> {
       if (err instanceof HttpError && (err.status === 422 || err.status === 400)) {
         // Malformed events can never succeed; drop them instead of blocking the queue forever.
         console.warn('[presence] Dropping rejected batch:', err.message);
+      } else if (err instanceof HttpError && err.status >= 500 && batch.length > 1) {
+        // One poison event must not block the rest — retry one-by-one.
+        console.warn('[presence] Batch failed with', err.status, '— retrying individually');
+        for (const ev of batch) {
+          try {
+            const res = await syncPresenceEvents([ev]);
+            isLoggedIn = res.is_logged_in;
+            const left = loadQueue()
+              .map(normalizeEvent)
+              .filter((e) => e.client_event_id !== ev.client_event_id);
+            saveQueue(left);
+            localStorage.setItem(LAST_SYNC_KEY, new Date().toISOString());
+          } catch (oneErr) {
+            if (oneErr instanceof NetworkError) {
+              queue = loadQueue().map(normalizeEvent).sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
+              return isLoggedIn;
+            }
+            if (oneErr instanceof HttpError && (oneErr.status === 422 || oneErr.status === 400 || oneErr.status >= 500)) {
+              console.warn('[presence] Dropping poison event', ev.client_event_id, oneErr.message);
+              const left = loadQueue()
+                .map(normalizeEvent)
+                .filter((e) => e.client_event_id !== ev.client_event_id);
+              saveQueue(left);
+              continue;
+            }
+            throw oneErr;
+          }
+        }
+        queue = loadQueue()
+          .map(normalizeEvent)
+          .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
+        continue;
+      } else if (err instanceof HttpError && err.status >= 500 && batch.length === 1) {
+        console.warn('[presence] Dropping poison event', batch[0]?.client_event_id, err.message);
       } else {
         throw err;
       }

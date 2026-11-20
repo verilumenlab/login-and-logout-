@@ -119,6 +119,14 @@ async def _add_attendance_event(
     client_event_id: str,
     notes: str,
 ) -> None:
+    existing = (
+        await db.execute(
+            select(AttendanceEvent).where(AttendanceEvent.client_event_id == client_event_id)
+        )
+    ).scalars().first()
+    if existing is not None:
+        await recalculate_attendance_day(db, day.id, commit=False)
+        return
     db.add(
         AttendanceEvent(
             attendance_day_id=day.id,
@@ -807,7 +815,10 @@ async def _apply_system_shutdown_logout(
     meta["sleep_auto_logout_at"] = close_at.isoformat()
     meta["sleep_auto_logout_reason"] = "system_shutdown"
     day.metadata_json = meta
-    await recalculate_attendance_day(db, day.id)
+    # Keep the same unit of work as PresenceEvent insert (commit=False).
+    # A mid-ingest commit left orphan CLOCK_OUT rows; retries then 500'd on unique
+    # client_event_id and blocked the whole desktop sync batch.
+    await recalculate_attendance_day(db, day.id, commit=False)
     return PresenceAttendanceAction.CLOCK_OUT
 
 
