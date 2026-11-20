@@ -172,6 +172,7 @@ async def ci_register_release(
     channel: Annotated[str | None, Form()] = None,
     release_notes: Annotated[str | None, Form()] = None,
     build_number: Annotated[str | None, Form()] = None,
+    auto_publish: Annotated[str | None, Form()] = None,
     setup_file: UploadFile = File(...),
     blockmap_file: UploadFile | None = File(None),
     latest_yml_file: UploadFile | None = File(None),
@@ -194,8 +195,37 @@ async def ci_register_release(
         source="ci",
     )
     await db.commit()
+    should_publish = str(auto_publish or "").strip().lower() in {"1", "true", "yes", "on"}
+    if should_publish:
+        release = await release_service.transition_release(
+            db,
+            release_id=release.id,
+            action="publish",
+            actor_user_id=None,
+            organization_id=None,
+        )
+        await db.commit()
     release = await release_service.get_release(db, release.id)
     return _to_out(release)
+
+
+@router.post("/{release_id}/ci-publish", response_model=ReleaseActionResponse)
+async def ci_publish_release(
+    release_id: uuid.UUID,
+    authorization: Annotated[str | None, Header()] = None,
+    db: AsyncSession = Depends(get_db),
+) -> ReleaseActionResponse:
+    """Publish an uploaded release using the CI token (no admin UI session required)."""
+    _verify_ci_token(authorization)
+    release = await release_service.transition_release(
+        db,
+        release_id=release_id,
+        action="publish",
+        actor_user_id=None,
+        organization_id=None,
+    )
+    await db.commit()
+    return ReleaseActionResponse(id=release.id, status=release.status, message="Release published")
 
 
 @router.post("/{release_id}/approve", response_model=ReleaseActionResponse)
