@@ -57,15 +57,27 @@ async def windows_latest_yml(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No published Windows release")
 
     yml_file = next((f for f in release.files if f.kind == "latest_yml"), None)
-    if not yml_file:
-        raise HTTPException(status_code=404, detail="Update manifest missing")
+    setup = next((f for f in release.files if f.kind == "setup"), None)
 
-    path = Path(yml_file.storage_path)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Update manifest file missing")
+    if yml_file:
+        path = Path(yml_file.storage_path)
+        if path.is_file():
+            text = path.read_text(encoding="utf-8")
+            return PlainTextResponse(content=text, media_type="text/yaml; charset=utf-8")
 
-    text = path.read_text(encoding="utf-8")
-    return PlainTextResponse(content=text, media_type="text/yaml; charset=utf-8")
+    # Render ephemeral disks lose uploaded binaries after redeploy. If the DB still
+    # points at a published version but files are gone, fail with an actionable message.
+    missing_setup = not setup or not Path(setup.storage_path).is_file()
+    raise HTTPException(
+        status_code=404,
+        detail=(
+            "Update package files are missing on the server. "
+            "Re-upload and publish this Windows release in App Releases"
+            + (f" (v{release.version})" if release.version else "")
+            + (" — setup exe missing" if missing_setup else " — latest.yml missing")
+            + "."
+        ),
+    )
 
 
 @router.get("/windows/{channel}/{filename}", response_model=None)

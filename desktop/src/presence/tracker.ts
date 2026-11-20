@@ -32,11 +32,29 @@ function saveQueue(queue: PresenceEventIn[]): void {
   localStorage.setItem(QUEUE_KEY, JSON.stringify(queue.slice(-MAX_QUEUE)));
 }
 
+/** Keep ISO timestamps within what Pydantic/JS typically accept (ms, not 7+ fraction digits). */
+function normalizeOccurredAt(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toISOString();
+}
+
+function normalizeEvent(ev: PresenceEventIn): PresenceEventIn {
+  return {
+    ...ev,
+    occurred_at: normalizeOccurredAt(ev.occurred_at),
+    ssid: ev.ssid ?? null,
+    client_event_id: String(ev.client_event_id || '').slice(0, 100),
+  };
+}
+
 function enqueue(events: PresenceEventIn[]): void {
   if (events.length === 0) return;
   const queue = loadQueue();
   const known = new Set(queue.map((e) => e.client_event_id));
-  for (const ev of events) {
+  for (const raw of events) {
+    const ev = normalizeEvent(raw);
+    if (!ev.client_event_id) continue;
     if (!known.has(ev.client_event_id)) {
       queue.push(ev);
       known.add(ev.client_event_id);
@@ -214,7 +232,11 @@ export async function collectWifiEvents(deviceId: string, osType: string): Promi
  * Network failures keep the queue for the next attempt; SessionExpiredError propagates to the caller.
  */
 export async function flushQueue(): Promise<boolean | null> {
-  let queue = loadQueue().sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
+  // Re-normalize any older queued rows (e.g. Windows bootlog timestamps with 7+ fraction digits).
+  let queue = loadQueue()
+    .map(normalizeEvent)
+    .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
+  saveQueue(queue);
   let isLoggedIn: boolean | null = null;
 
   while (queue.length > 0) {
@@ -224,7 +246,7 @@ export async function flushQueue(): Promise<boolean | null> {
       isLoggedIn = res.is_logged_in;
     } catch (err) {
       if (err instanceof NetworkError) break;
-      if (err instanceof HttpError && err.status === 422) {
+      if (err instanceof HttpError && (err.status === 422 || err.status === 400)) {
         // Malformed events can never succeed; drop them instead of blocking the queue forever.
         console.warn('[presence] Dropping rejected batch:', err.message);
       } else {
@@ -232,7 +254,10 @@ export async function flushQueue(): Promise<boolean | null> {
       }
     }
     const sent = new Set(batch.map((e) => e.client_event_id));
-    queue = loadQueue().filter((e) => !sent.has(e.client_event_id)).sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
+    queue = loadQueue()
+      .map(normalizeEvent)
+      .filter((e) => !sent.has(e.client_event_id))
+      .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
     saveQueue(queue);
     localStorage.setItem(LAST_SYNC_KEY, new Date().toISOString());
   }

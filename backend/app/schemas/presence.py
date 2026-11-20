@@ -8,9 +8,27 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from datetime import datetime
+
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 from app.models.presence import PresenceAttendanceAction, PresenceEventType
+
+
+def _coerce_aware_datetime(value: object) -> object:
+    """Accept Windows boot-log stamps with >6 fractional digits."""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if text.endswith("Z"):
+        body, _, frac = text[:-1].partition(".")
+        if frac:
+            frac = (frac + "000000")[:6]
+            text = f"{body}.{frac}Z"
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return value
 
 
 class PresenceEventIn(BaseModel):
@@ -22,6 +40,11 @@ class PresenceEventIn(BaseModel):
     device_id: str | None = Field(default=None, max_length=255)
     # Optional human note (e.g. auto-logout reason) stored on the attendance event.
     detail: str | None = Field(default=None, max_length=500)
+
+    @field_validator("occurred_at", mode="before")
+    @classmethod
+    def normalize_occurred_at(cls, value: object) -> object:
+        return _coerce_aware_datetime(value)
 
 
 class PresenceSyncRequest(BaseModel):
