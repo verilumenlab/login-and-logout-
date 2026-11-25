@@ -546,6 +546,38 @@ async def test_report_preview_and_manual_dispatch_api(client: AsyncClient, setup
     )
     assert bad_res.status_code == 400
 
+    # 4b. Sending the same week to the same addresses again must NOT pretend it sent anything
+    same_payload = {
+        "report_type": "WEEKLY",
+        "start_date": "2026-11-06",
+        "end_date": "2026-11-13",
+        "recipients": ["hr_exec@corp.com", "vp_operations@corp.com"],
+    }
+    again = await client.post("/api/v1/reports/manual-send", json=same_payload, headers=admin_headers)
+    assert again.status_code == 409
+    assert "already received" in again.json()["detail"]
+
+    # 4c. A new address on that week is sent; the earlier ones are reported as skipped
+    mixed = await client.post(
+        "/api/v1/reports/manual-send",
+        json={**same_payload, "recipients": ["hr_exec@corp.com", "new_person@corp.com"]},
+        headers=admin_headers,
+    )
+    assert mixed.status_code == 201
+    mixed_data = mixed.json()
+    assert mixed_data["recipients"] == ["new_person@corp.com"]
+    assert mixed_data["skipped_recipients"] == ["hr_exec@corp.com"]
+
+    # 4d. "Send again" really delivers a fresh copy to everyone selected
+    resent = await client.post(
+        "/api/v1/reports/manual-send",
+        json={**same_payload, "resend": True},
+        headers=admin_headers,
+    )
+    assert resent.status_code == 201
+    assert sorted(resent.json()["recipients"]) == ["hr_exec@corp.com", "vp_operations@corp.com"]
+    assert resent.json()["skipped_recipients"] == []
+
     # 5. Download: the saved workbook is a real, openable .xlsx
     import io as _io
 

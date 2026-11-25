@@ -12,6 +12,7 @@ import pathlib
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse, Response
@@ -27,6 +28,7 @@ from app.models.attendance import AttendanceDay, AttendanceStatus
 from app.models.auth import User
 from app.models.employee import EmployeeProfile, EmploymentStatus
 from app.models.leave import LeaveRequest
+from app.models.notification import EmailOutbox, OutboxStatus
 from app.models.organization import Organization
 from app.models.reporting import ReportFile, ReportJob, ReportSchedule, ReportStatus, ReportType
 from app.services.email_service import EmailService
@@ -297,6 +299,8 @@ class ManualReportSendRequest(BaseModel):
     recipients: list[str]
     subject_override: str | None = None
     custom_note: str | None = None
+    # True = deliberately email the same period again to addresses that already received it.
+    resend: bool = False
 
 
 class ManualReportSendResponse(BaseModel):
@@ -305,6 +309,7 @@ class ManualReportSendResponse(BaseModel):
     file_name: str
     recipients: list[str]
     failed_recipients: list[dict[str, str]] = []
+    skipped_recipients: list[str] = []
     status: str
     timestamp: datetime
     message: str
@@ -411,6 +416,7 @@ class WeeklyApprovalRecipient(BaseModel):
     email: str
     role: str
     selected: bool = True
+    already_sent_at: datetime | None = None
 
 
 class WeeklyApprovalDefaults(BaseModel):
@@ -431,6 +437,31 @@ def _split_emails(raw: str | None) -> list[str]:
 def _can_dispatch(current_user: User) -> bool:
     user_role = current_user.role.name.lower() if current_user.role else ""
     return any(r in user_role for r in ["admin", "super", "hr", "manager", "lead", "supervisor"])
+
+
+async def _already_sent_times(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    emails: list[str],
+    frequency: str,
+    date_str: str,
+) -> dict[str, datetime]:
+    """When each address last received this period's report (email already SENT), by address."""
+    if not emails:
+        return {}
+    rows = (
+        await db.execute(
+            select(EmailOutbox.recipient_email, func.max(func.coalesce(EmailOutbox.sent_at, EmailOutbox.created_at)))
+            .where(
+                EmailOutbox.organization_id == org_id,
+                EmailOutbox.recipient_email.in_([e.lower() for e in emails]),
+                EmailOutbox.status == OutboxStatus.SENT,
+                EmailOutbox.idempotency_key.like(f"att_rpt_{frequency.lower()}_%{date_str}%"),
+            )
+            .group_by(EmailOutbox.recipient_email)
+        )
+    ).all()
+    return {str(email).lower(): sent for email, sent in rows}
 
 
 @router.get("/weekly-approval", response_model=WeeklyApprovalDefaults)
@@ -478,22 +509,14 @@ async def weekly_approval_defaults(
     except Exception:
         logger.exception("Could not load org report recipients for weekly approval defaults")
 
-    last_sent_at: datetime | None = None
-    last_sent_recipients: list[str] = []
-    recent = (
-        await db.execute(
-            select(ReportJob)
-            .where(ReportJob.organization_id == org_id, ReportJob.report_type == ReportType.WEEKLY)
-            .order_by(desc(ReportJob.created_at))
-            .limit(20)
-        )
-    ).scalars().all()
-    for job in recent:
-        params = job.parameters_json or {}
-        if params.get("manual_dispatch") and params.get("start_date") == str(start_date):
-            last_sent_at = job.completed_at or job.created_at
-            last_sent_recipients = list(params.get("sent_recipients") or params.get("recipients") or [])
-            break
+    # Which of these addresses already received this week's email (taken from real delivered mail).
+    sent_map = await _already_sent_times(
+        db, org_id, [r.email for r in recipients], "WEEKLY", f"{start_date} to {end_date}"
+    )
+    for r in recipients:
+        r.already_sent_at = sent_map.get(r.email)
+    last_sent_at = max(sent_map.values()) if sent_map else None
+    last_sent_recipients = [r.email for r in recipients if r.already_sent_at]
 
     return WeeklyApprovalDefaults(
         start_date=start_date,
@@ -541,6 +564,30 @@ async def manual_send_report(
 
     now = datetime.now(UTC)
     org_id = current_user.organization_id
+
+    # Duplicate protection: an address that already received this period's report is skipped,
+    # unless the admin explicitly asked to send it again.
+    date_str = f"{payload.start_date} to {payload.end_date}"
+    skipped: list[str] = []
+    resend_token: str | None = None
+    if payload.resend:
+        resend_token = str(int(now.timestamp()))
+    else:
+        sent_map = await _already_sent_times(db, org_id, recipients, payload.report_type.value, date_str)
+        skipped = [e for e in recipients if e in sent_map]
+        recipients = [e for e in recipients if e not in sent_map]
+        if not recipients:
+            when = "; ".join(
+                f"{e} at {sent_map[e].astimezone(ZoneInfo('Asia/Kolkata')):%d %b %H:%M} IST" for e in skipped
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Nothing was sent: everyone selected already received this report ({when}). "
+                    "Tick 'Send again' to email it again."
+                ),
+            )
+
     step = "start"
     try:
         step = "load schedule timezone"
@@ -623,10 +670,11 @@ async def manual_send_report(
                     recipient_email=email,
                     recipient_name=email.split("@")[0].title(),
                     report_frequency=payload.report_type.value,
-                    date_str=f"{payload.start_date} to {payload.end_date}",
+                    date_str=date_str,
                     attachment_path=file_path,
                     attachment_filename=file_name,
                     stats=stats,
+                    resend_token=resend_token,
                 )
                 dispatched.append(email)
             except Exception as exc:  # one bad address must not block the others
@@ -658,6 +706,8 @@ async def manual_send_report(
         )
 
     message = f"Weekly report approved and sent to {len(dispatched)} recipient(s): {', '.join(dispatched)}."
+    if skipped:
+        message += f" Already received earlier (not sent again): {', '.join(skipped)}."
     if failed:
         message += f" Failed for: {', '.join(f['email'] for f in failed)}."
     return ManualReportSendResponse(
@@ -666,6 +716,7 @@ async def manual_send_report(
         file_name=file_name,
         recipients=dispatched,
         failed_recipients=failed,
+        skipped_recipients=skipped,
         status="DISPATCHED" if not failed else "PARTIAL",
         timestamp=now,
         message=message,

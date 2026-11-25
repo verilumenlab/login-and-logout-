@@ -1094,8 +1094,13 @@ class EmailService:
         stats: dict[str, Any],
         attachment_path: str | None = None,
         attachment_filename: str | None = None,
+        resend_token: str | None = None,
     ) -> EmailOutbox:
-        """Dispatches automated attendance digests with optional Excel attachments."""
+        """Dispatches automated attendance digests with optional Excel attachments.
+
+        ``resend_token`` makes the duplicate-protection key unique so an admin can deliberately
+        send the same period to the same address again.
+        """
         freq_upper = report_frequency.upper()
         if freq_upper == "DAILY":
             template_key = "attendance_daily_report"
@@ -1141,6 +1146,8 @@ class EmailService:
             }]
 
         idempotency_key = f"att_rpt_{freq_upper.lower()}_{recipient_email}_{date_str}"
+        if resend_token:
+            idempotency_key = f"{idempotency_key}_resend_{resend_token}"
         outbox = await cls.enqueue_email(
             db=db,
             organization_id=organization_id,

@@ -449,6 +449,7 @@ export interface WeeklyApprovalRecipient {
   email: string;
   role: string;
   selected: boolean;
+  already_sent_at?: string | null;
 }
 
 export interface WeeklyApprovalDefaults {
@@ -1414,7 +1415,13 @@ export class ApiClient {
     });
   }
 
-  async manualSendReport(reportType: string, startDate: string, endDate: string, recipients: string[]): Promise<any> {
+  async manualSendReport(
+    reportType: string,
+    startDate: string,
+    endDate: string,
+    recipients: string[],
+    resend: boolean = false
+  ): Promise<any> {
     return this.request('/reports/manual-send', {
       method: 'POST',
       body: JSON.stringify({
@@ -1422,6 +1429,7 @@ export class ApiClient {
         start_date: startDate,
         end_date: endDate,
         recipients,
+        resend,
       }),
     });
   }

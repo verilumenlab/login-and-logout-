@@ -130,7 +130,16 @@ export default function ReportsPage() {
     setNewEmail('');
   };
 
+  const [resendAgain, setResendAgain] = useState(false);
+  const samePeriod =
+    !!defaults && manualStartDate === defaults.start_date && manualEndDate === defaults.end_date;
+  const alreadySent = (r: WeeklyApprovalRecipient) => samePeriod && !!r.already_sent_at;
   const selectedEmails = recipients.filter((r) => r.selected).map((r) => r.email);
+  // Addresses that will actually receive a new email on approval.
+  const emailsToSend = recipients
+    .filter((r) => r.selected && (resendAgain || !alreadySent(r)))
+    .map((r) => r.email);
+  const selectedAlreadySent = recipients.filter((r) => r.selected && alreadySent(r)).length;
 
   const handleApproveAndSend = async () => {
     setSendSuccess(null);
@@ -140,15 +149,30 @@ export default function ReportsPage() {
       setSendError('Tick at least one recipient before approving.');
       return;
     }
+    if (emailsToSend.length === 0) {
+      setSendError(
+        'Everyone selected already received this week’s report. Tick “Send again” if you want to email it again.'
+      );
+      return;
+    }
     const ok = window.confirm(
-      `Approve and send the weekly report (${manualStartDate} to ${manualEndDate}) to:\n\n${selectedEmails.join('\n')}\n\nThe 9-sheet Excel will be emailed now.`
+      `Approve and send the weekly report (${manualStartDate} to ${manualEndDate}) to:\n\n${emailsToSend.join('\n')}\n\n` +
+        (resendAgain ? 'This is a repeat send.\n\n' : '') +
+        'The 9-sheet Excel will be emailed now.'
     );
     if (!ok) return;
     setSendLoading(true);
     try {
-      const res = await apiClient.manualSendReport('WEEKLY', manualStartDate, manualEndDate, selectedEmails);
+      const res = await apiClient.manualSendReport(
+        'WEEKLY',
+        manualStartDate,
+        manualEndDate,
+        emailsToSend,
+        resendAgain
+      );
       setSendSuccess(res.message || 'Weekly report approved and sent.');
       setSendFailed(res.failed_recipients || []);
+      setResendAgain(false);
       await Promise.all([fetchReports(), fetchDefaults()]);
     } catch (e: any) {
       setSendError(e?.message || 'Sending failed.');
@@ -210,11 +234,16 @@ export default function ReportsPage() {
             </button>
             <button
               onClick={handleApproveAndSend}
-              disabled={sendLoading || !manualStartDate || selectedEmails.length === 0}
+              disabled={sendLoading || !manualStartDate || emailsToSend.length === 0}
+              title={
+                emailsToSend.length === 0 && selectedEmails.length > 0
+                  ? 'Everyone selected already received it. Tick “Send again” to email it again.'
+                  : undefined
+              }
               className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-sm disabled:opacity-50"
             >
               {sendLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-              Approve &amp; Send ({selectedEmails.length})
+              Approve &amp; Send ({emailsToSend.length})
             </button>
           </div>
         </div>
@@ -241,7 +270,7 @@ export default function ReportsPage() {
             )}
             <span>
               {defaults.last_sent_at
-                ? `Week ${defaults.start_date} to ${defaults.end_date} was sent on ${new Date(defaults.last_sent_at).toLocaleString()} to ${defaults.last_sent_recipients.join(', ') || 'recipients'}.`
+                ? `Week ${defaults.start_date} to ${defaults.end_date}: already emailed to ${defaults.last_sent_recipients.join(', ')} (last at ${new Date(defaults.last_sent_at).toLocaleString()}). Addresses marked “Already received” are skipped unless you tick “Send again”.`
                 : `Week ${defaults.start_date} to ${defaults.end_date} has not been sent yet. Approve below to send it now.`}
             </span>
           </div>
@@ -298,6 +327,11 @@ export default function ReportsPage() {
                   <span className="truncate font-medium">{r.email}</span>
                 </label>
                 <div className="flex items-center gap-2 flex-shrink-0">
+                  {alreadySent(r) && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
+                      Already received · {new Date(r.already_sent_at as string).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  )}
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300">
                     {r.role}
                   </span>
@@ -336,6 +370,20 @@ export default function ReportsPage() {
               Add
             </button>
           </div>
+          {selectedAlreadySent > 0 && (
+            <label className="mt-3 flex items-start gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={resendAgain}
+                onChange={(e) => setResendAgain(e.target.checked)}
+                className="mt-0.5 rounded border-slate-300"
+              />
+              <span>
+                Send again — also email the {selectedAlreadySent} address{selectedAlreadySent > 1 ? 'es' : ''} marked
+                “Already received” (they will get a second copy).
+              </span>
+            </label>
+          )}
         </div>
 
         {/* Result banners */}
