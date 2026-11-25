@@ -10,6 +10,8 @@
 .dark {
   --foreground-rgb: 241, 245, 249;
   --background-rgb: 15, 23, 42;
+  /* Native controls (date picker, dropdown lists, scrollbars) render dark too. */
+  color-scheme: dark;
 }
 
 body {
@@ -18,3 +20,66 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
+/*
+ * Dark theme safety net.
+ *
+ * Many screens (employee dialogs, departments, health, employee detail, ...) only styled the light
+ * theme, which left white boxes with white text in dark mode. These rules make every screen
+ * readable: boxes turn dark and text turns white.
+ *
+ * They use :where() so they have the lowest specificity: any element that already declares its own
+ * dark: utility keeps that styling.
+ */
+.dark :where(.bg-white) {
+  background-color: rgb(15 23 42); /* slate-900 */
+}
+.dark :where(.bg-slate-50) {
+  background-color: rgb(30 41 59 / 0.6); /* slate-800 @ 60% */
+}
+.dark :where(.bg-slate-100) {
+  background-color: rgb(30 41 59); /* slate-800 */
+}
+
+.dark :where(.text-slate-900, .text-slate-800, .text-slate-700, .text-black, .text-gray-900, .text-gray-800, .text-gray-700) {
+  color: rgb(255 255 255);
+}
+.dark :where(.text-slate-600, .text-gray-600) {
+  color: rgb(226 232 240); /* slate-200 */
+}
+.dark :where(.text-slate-500, .text-gray-500) {
+  color: rgb(203 213 225); /* slate-300 */
+}
+.dark :where(.text-slate-400, .text-gray-400) {
+  color: rgb(148 163 184); /* slate-400 stays readable on slate-900 */
+}
+
+.dark :where(.border-slate-100, .border-slate-200, .border-slate-300, .border-gray-200, .border-gray-300) {
+  border-color: rgb(51 65 85); /* slate-700 */
+}
+.dark :where(.divide-slate-100, .divide-slate-200, .divide-gray-200) > :where(:not([hidden])) ~ :where(:not([hidden])) {
+  border-color: rgb(51 65 85);
+}
+
+.dark .hover\:bg-slate-50:hover,
+.dark .hover\:bg-slate-100:hover {
+  background-color: rgb(30 41 59);
+}
+
+/* Form fields: always white text on a dark field, readable placeholders. */
+.dark :where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]), select, textarea) {
+  color: rgb(255 255 255);
+  background-color: rgb(15 23 42);
+  border-color: rgb(71 85 105); /* slate-600 */
+}
+.dark :where(input, textarea)::placeholder {
+  color: rgb(148 163 184);
+  opacity: 1;
+}
+.dark :where(select option, select optgroup) {
+  color: rgb(255 255 255);
+  background-color: rgb(15 23 42);
+}
+.dark :where(input, select, textarea):disabled {
+  color: rgb(203 213 225);
+  opacity: 0.7;
+}
