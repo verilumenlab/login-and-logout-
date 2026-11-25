@@ -69,6 +69,7 @@ export default function EmployeeDetailsPage() {
       setEditForm({
         first_name: emp.first_name,
         last_name: emp.last_name,
+        email: emp.email,
         employee_code: emp.employee_code,
         phone: emp.phone || '',
         job_title: emp.job_title || '',
@@ -366,6 +367,23 @@ export default function EmployeeDetailsPage() {
                 className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Email Address (login ID) *</label>
+            <input
+              type="email"
+              required
+              value={editForm.email || ''}
+              onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+              placeholder="name@company.com"
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            {employee && editForm.email && editForm.email.trim().toLowerCase() !== employee.email.toLowerCase() && (
+              <p className="text-xs text-amber-600 mt-1">
+                This is also the login ID. The employee will be signed out and must log in with the new address.
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

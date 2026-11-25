@@ -349,6 +349,33 @@ async def test_edit_employee_profile_and_manager_assignment(
 
 
 @pytest.mark.asyncio
+async def test_admin_can_change_employee_email(client: AsyncClient, setup_employee_env: dict):
+    env = setup_employee_env
+    login = await client.post("/api/v1/auth/login", json={"email": env["admin_email"], "password": "AdminPass123!"})
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    emp_id = env["emp_profile"].id
+
+    # Address already used by another account is rejected
+    dup = await client.put(f"/api/v1/employees/{emp_id}", headers=headers, json={"email": env["hr_email"]})
+    assert dup.status_code == 400
+    assert "already exists" in dup.json()["detail"]
+
+    # Invalid address is rejected
+    bad = await client.put(f"/api/v1/employees/{emp_id}", headers=headers, json={"email": "not-an-email"})
+    assert bad.status_code == 422
+
+    # New address is saved (lower-cased) and returned
+    new_email = f"New.Address_{env['uid']}@vanguard.com"
+    ok = await client.put(f"/api/v1/employees/{emp_id}", headers=headers, json={"email": new_email})
+    assert ok.status_code == 200
+    assert ok.json()["email"] == new_email.lower()
+
+    # Saved on the account: the detail view shows the new address
+    detail = await client.get(f"/api/v1/employees/{emp_id}", headers=headers)
+    assert detail.json()["email"] == new_email.lower()
+
+
+@pytest.mark.asyncio
 async def test_admin_assigns_portal_roles(client: AsyncClient, setup_employee_env: dict):
     env = setup_employee_env
     login = await client.post("/api/v1/auth/login", json={"email": env["admin_email"], "password": "AdminPass123!"})

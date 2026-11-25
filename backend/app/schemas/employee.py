@@ -63,6 +63,8 @@ class EmployeeUpdate(BaseModel):
     first_name: str | None = Field(default=None, min_length=1, max_length=100)
     last_name: str | None = Field(default=None, min_length=1, max_length=100)
     employee_code: str | None = Field(default=None, min_length=2, max_length=50)
+    # Login / mail ID. Changing it signs the employee out so they log in with the new address.
+    email: EmailStr | None = None
     phone: str | None = Field(default=None, max_length=50)
     job_title: str | None = Field(default=None, max_length=150)
     department_id: uuid.UUID | None = None

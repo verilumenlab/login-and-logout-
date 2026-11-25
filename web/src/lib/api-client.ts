@@ -152,6 +152,7 @@ export interface EmployeeCreate {
 export interface EmployeeUpdate {
   first_name?: string;
   last_name?: string;
+  email?: string;
   employee_code?: string;
   phone?: string;
   job_title?: string;

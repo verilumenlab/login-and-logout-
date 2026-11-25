@@ -653,6 +653,32 @@ async def update_employee(
             diff["employee_code"] = {"old": emp.employee_code, "new": new_code}
             emp.employee_code = new_code
 
+    # 1b. Login / mail ID
+    if payload.email is not None and emp.user:
+        new_email = str(payload.email).strip().lower()
+        if new_email != (emp.user.email or "").strip().lower():
+            email_taken = await db.scalar(
+                select(User.id).where(
+                    User.organization_id == current_user.organization_id,
+                    func.lower(User.email) == new_email,
+                    User.id != emp.user.id,
+                )
+            )
+            if email_taken:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"An account with email '{new_email}' already exists in this organization.",
+                )
+            diff["email"] = {"old": emp.user.email, "new": new_email}
+            emp.user.email = new_email
+            if emp.user.id != current_user.id:
+                # The login ID changed: end their sessions so they sign in again with the new address.
+                await db.execute(
+                    update(RefreshToken)
+                    .where(RefreshToken.user_id == emp.user.id, RefreshToken.is_revoked.is_(False))
+                    .values(is_revoked=True, revoked_at=datetime.now(UTC), revocation_reason="Login email changed")
+                )
+
     # 2. Personal & Job Details
     if payload.first_name is not None and payload.first_name.strip() != emp.first_name:
         diff["first_name"] = {"old": emp.first_name, "new": payload.first_name.strip()}
