@@ -24,6 +24,7 @@ from app.models.attendance import AttendanceDay, AttendanceStatus
 from app.models.auth import User
 from app.models.employee import EmployeeProfile, EmploymentStatus
 from app.models.leave import LeaveRequest
+from app.models.organization import Organization
 from app.models.reporting import ReportFile, ReportJob, ReportSchedule, ReportStatus, ReportType
 from app.services.email_service import EmailService
 from app.services.report_dataset import build_report_dataset
@@ -383,7 +384,8 @@ async def manual_send_report(
     await db.flush()
 
     # 5. Generate 9-Worksheet Report
-    org_name = (current_user.organization.name if hasattr(current_user, "organization") and current_user.organization else "Enterprise")
+    # Explicit query: lazy-loading current_user.organization inside an async session raises MissingGreenlet (500).
+    org_name = (await db.scalar(select(Organization.name).where(Organization.id == org_id))) or "Enterprise"
     report_title = f"Manual {payload.report_type.value.title()} Digest ({payload.start_date} to {payload.end_date})"
 
     file_name, file_path, file_size = ExcelReportEngine.generate_weekly_consolidated_report(
