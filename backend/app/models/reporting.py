@@ -48,7 +48,7 @@ class ReportSchedule(Base, UUIDMixin, TenantMixin, TimestampMixin):
     __tablename__ = "report_schedules"
     __table_args__ = (UniqueConstraint("organization_id", "schedule_type", name="uq_report_schedule_org_type"),)
 
-    schedule_type: Mapped[ReportType] = mapped_column(Enum(ReportType), nullable=False)
+    schedule_type: Mapped[ReportType] = mapped_column(Enum(ReportType, native_enum=False, length=50), nullable=False)
     cron_expression: Mapped[str] = mapped_column(String(100), default="0 6 * * *", nullable=False)
     timezone: Mapped[str] = mapped_column(String(50), default="UTC", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -85,7 +85,7 @@ class ReportJob(Base, UUIDMixin, TenantMixin, TimestampMixin):
         index=True,
         nullable=False,
     )
-    report_type: Mapped[ReportType] = mapped_column(Enum(ReportType), nullable=False)
+    report_type: Mapped[ReportType] = mapped_column(Enum(ReportType, native_enum=False, length=50), nullable=False)
     status: Mapped[ReportStatus] = mapped_column(
         Enum(ReportStatus), default=ReportStatus.QUEUED, index=True, nullable=False
     )
