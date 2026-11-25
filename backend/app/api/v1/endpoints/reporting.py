@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import pathlib
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -30,6 +31,7 @@ from app.models.organization import Organization
 from app.models.reporting import ReportFile, ReportJob, ReportSchedule, ReportStatus, ReportType
 from app.services.email_service import EmailService
 from app.services.report_dataset import build_report_dataset
+from app.services import report_generator as report_generator_module
 from app.services.report_generator import ExcelReportEngine
 from app.services.report_scheduler_service import ReportSchedulerService
 
@@ -176,8 +178,19 @@ async def download_report_file(
             detail="Access denied: You do not have permission to download this report",
         )
 
-    # Return valid Excel workbook stream
-    content = b"PK\x03\x04\x14\x00\x06\x00" + b"\x00" * 100  # Valid PK ZIP signature
+    content = _read_saved_report(rep_file.storage_path)
+    if content is None:
+        # The saved file is gone (the hosting disk is temporary and is wiped on restart/deploy,
+        # and "Generate" archive rows never had a file). Rebuild the workbook for the same period.
+        try:
+            content = await _rebuild_report_workbook(db, rep_file, current_user.organization_id)
+        except Exception as exc:
+            logger.exception("Could not rebuild report workbook %s", rep_file.id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Could not prepare the Excel file: {type(exc).__name__}: {exc}",
+            ) from exc
+
     return Response(
         content=content,
         media_type=rep_file.mime_type or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -186,6 +199,65 @@ async def download_report_file(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+def _reports_storage_root() -> pathlib.Path:
+    return (pathlib.Path(report_generator_module.__file__).resolve().parent.parent.parent / "storage" / "reports").resolve()
+
+
+def _read_saved_report(storage_path: str | None) -> bytes | None:
+    """Return the saved workbook bytes, only if it lives inside the reports storage folder."""
+    if not storage_path:
+        return None
+    try:
+        path = pathlib.Path(storage_path).resolve()
+        path.relative_to(_reports_storage_root())  # path-traversal guard
+        if path.is_file() and path.stat().st_size > 0:
+            return path.read_bytes()
+    except (ValueError, OSError):
+        return None
+    return None
+
+
+async def _rebuild_report_workbook(db: AsyncSession, rep_file: ReportFile, org_id: uuid.UUID) -> bytes:
+    job = rep_file.report_job
+    params = job.parameters_json or {}
+    try:
+        start = date.fromisoformat(str(params["start_date"]))
+        end = date.fromisoformat(str(params["end_date"]))
+    except (KeyError, ValueError):
+        # No stored period: use the 7 days ending on the day the job was created.
+        end = (job.created_at or datetime.now(UTC)).date()
+        start = end - timedelta(days=6)
+
+    tz_name = (
+        await db.scalar(
+            select(ReportSchedule.timezone).where(
+                ReportSchedule.organization_id == org_id,
+                ReportSchedule.schedule_type == ReportType.WEEKLY,
+            )
+        )
+    ) or "Asia/Kolkata"
+    dataset = await build_report_dataset(db, org_id, start, end, tz_name)
+    org_name = (await db.scalar(select(Organization.name).where(Organization.id == org_id))) or "Enterprise"
+    title = f"{job.report_type.value.replace('_', ' ').title()} ({start} to {end})"
+    _, new_path, new_size = ExcelReportEngine.generate_weekly_consolidated_report(
+        job_id=job.id,
+        org_name=org_name,
+        report_title=title,
+        start_date=start,
+        end_date=end,
+        employees_data=dataset.employees_data,
+        attendance_logs=dataset.attendance_logs,
+        os_events=dataset.os_events,
+        leaves_data=dataset.leaves_data,
+        wifi_logs=dataset.wifi_logs,
+        exceptions_data=dataset.exceptions_data,
+    )
+    rep_file.storage_path = new_path
+    rep_file.file_size_bytes = new_size
+    await db.commit()
+    return pathlib.Path(new_path).read_bytes()
 
 
 # ==========================================

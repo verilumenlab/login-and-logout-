@@ -97,6 +97,21 @@ export default function ReportsPage() {
     }
   };
 
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  const handleDownload = async (fileId: string, fileName: string) => {
+    setDownloadingId(fileId);
+    setDownloadError(null);
+    try {
+      await apiClient.downloadReportFile(fileId, fileName);
+    } catch (e: any) {
+      setDownloadError(`Download failed: ${e?.message || 'unknown error'}`);
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
   const toggleRecipient = (email: string) =>
     setRecipients((prev) => prev.map((r) => (r.email === email ? { ...r, selected: !r.selected } : r)));
 
@@ -416,6 +431,11 @@ export default function ReportsPage() {
         <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 font-bold text-sm text-slate-800 dark:text-slate-200">
           Generated Report Files &amp; Export Archive
         </div>
+        {downloadError && (
+          <div className="mx-6 mt-3 p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-xl text-xs text-red-800 dark:text-red-300">
+            {downloadError}
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-sm">
             <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 dark:text-slate-400 text-xs uppercase font-medium">
@@ -459,17 +479,19 @@ export default function ReportsPage() {
                     </td>
                     <td className="py-3.5 px-4 text-right">
                       {file && (
-                        <a
-                          href="#"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            alert(`Downloading verified spreadsheet export: ${file.file_name}`);
-                          }}
-                          className="inline-flex items-center gap-1 px-3 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold rounded-lg transition"
+                        <button
+                          type="button"
+                          disabled={downloadingId === file.id}
+                          onClick={() => handleDownload(file.id, file.file_name)}
+                          className="inline-flex items-center gap-1 px-3 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold rounded-lg transition disabled:opacity-60"
                         >
-                          <Download className="w-3.5 h-3.5" />
+                          {downloadingId === file.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Download className="w-3.5 h-3.5" />
+                          )}
                           Download
-                        </a>
+                        </button>
                       )}
                     </td>
                   </tr>

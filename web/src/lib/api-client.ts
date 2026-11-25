@@ -946,6 +946,42 @@ export class ApiClient {
     URL.revokeObjectURL(url);
   }
 
+  /** Download a generated report workbook (.xlsx) from the Reports archive. */
+  async downloadReportFile(fileId: string, fileName: string): Promise<void> {
+    const endpoint = `/reports/files/${fileId}/download`;
+    let response = await this.send(endpoint, { method: 'GET' });
+    if (response.status === 401 && this.getToken()) {
+      if (await this.refreshAccessToken()) {
+        response = await this.send(endpoint, { method: 'GET' });
+      }
+      if (response.status === 401) {
+        this.clearSession();
+        this.sessionExpiredHandler?.();
+        throw new ApiError('Your session has expired. Please sign in again.', 401);
+      }
+    }
+    if (!response.ok) {
+      const errorBody = await response.text();
+      let detail = errorBody;
+      try {
+        const parsed = JSON.parse(errorBody);
+        detail = parsed.detail || errorBody;
+      } catch {
+        /* keep text */
+      }
+      throw new ApiError(typeof detail === 'string' ? detail : 'Download failed', response.status);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   // --- Health ---
   async getHealth(): Promise<HealthStatus> {
     return this.request<HealthStatus>('/health');

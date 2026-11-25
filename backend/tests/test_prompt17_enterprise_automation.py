@@ -545,3 +545,34 @@ async def test_report_preview_and_manual_dispatch_api(client: AsyncClient, setup
         headers=admin_headers,
     )
     assert bad_res.status_code == 400
+
+    # 5. Download: the saved workbook is a real, openable .xlsx
+    import io as _io
+
+    import openpyxl as _openpyxl
+
+    dl = await client.get(f"/api/v1/reports/files/{send_data['file_id']}/download", headers=admin_headers)
+    assert dl.status_code == 200
+    assert "attachment" in dl.headers["content-disposition"]
+    assert "Daily Login" in _openpyxl.load_workbook(_io.BytesIO(dl.content)).sheetnames
+
+    # 6. Download still works after the hosting disk was wiped (file rebuilt for the same period)
+    jobs = (await client.get("/api/v1/reports/", headers=admin_headers)).json()
+    sent_job = next(j for j in jobs if j["id"] == send_data["job_id"])
+    saved_path = sent_job["files"][0]["storage_path"]
+    os.remove(saved_path)
+    dl2 = await client.get(f"/api/v1/reports/files/{send_data['file_id']}/download", headers=admin_headers)
+    assert dl2.status_code == 200
+    assert "Daily Login" in _openpyxl.load_workbook(_io.BytesIO(dl2.content)).sheetnames
+
+    # 7. "Generate" archive rows (which never had a file) also download a real workbook
+    gen = await client.post(
+        "/api/v1/reports/generate",
+        json={"report_type": "ATTENDANCE_SUMMARY", "parameters": {}},
+        headers=admin_headers,
+    )
+    assert gen.status_code == 201
+    gen_file_id = gen.json()["files"][0]["id"]
+    dl3 = await client.get(f"/api/v1/reports/files/{gen_file_id}/download", headers=admin_headers)
+    assert dl3.status_code == 200
+    assert "Daily Login" in _openpyxl.load_workbook(_io.BytesIO(dl3.content)).sheetnames
