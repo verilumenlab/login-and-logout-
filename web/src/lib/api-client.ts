@@ -444,6 +444,23 @@ export interface ReportJob {
   }[];
 }
 
+export interface WeeklyApprovalRecipient {
+  email: string;
+  role: string;
+  selected: boolean;
+}
+
+export interface WeeklyApprovalDefaults {
+  start_date: string;
+  end_date: string;
+  period_key: string;
+  timezone: string;
+  schedule_note: string;
+  recipients: WeeklyApprovalRecipient[];
+  last_sent_at: string | null;
+  last_sent_recipients: string[];
+}
+
 export interface EmailOutbox {
   id: string;
   recipient_email: string;
@@ -1370,6 +1387,10 @@ export class ApiClient {
         recipients,
       }),
     });
+  }
+
+  async getWeeklyApprovalDefaults(): Promise<WeeklyApprovalDefaults> {
+    return this.request<WeeklyApprovalDefaults>('/reports/weekly-approval');
   }
 
   async getEmployeeLoginHistory(employeeId: string, limit: number = 30): Promise<any[]> {

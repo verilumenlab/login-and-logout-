@@ -6,6 +6,7 @@ Generate analytical spreadsheets and summaries for HR and Managers.
 from __future__ import annotations
 
 import io
+import logging
 import os
 import uuid
 from datetime import UTC, date, datetime, timedelta
@@ -18,6 +19,7 @@ from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.dependencies import check_employee_record_access, get_current_active_user, require_role
 from app.models.attendance import AttendanceDay, AttendanceStatus
@@ -29,7 +31,9 @@ from app.models.reporting import ReportFile, ReportJob, ReportSchedule, ReportSt
 from app.services.email_service import EmailService
 from app.services.report_dataset import build_report_dataset
 from app.services.report_generator import ExcelReportEngine
+from app.services.report_scheduler_service import ReportSchedulerService
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -228,6 +232,7 @@ class ManualReportSendResponse(BaseModel):
     file_id: uuid.UUID
     file_name: str
     recipients: list[str]
+    failed_recipients: list[dict[str, str]] = []
     status: str
     timestamp: datetime
     message: str
@@ -330,6 +335,106 @@ async def preview_report_data(
     )
 
 
+class WeeklyApprovalRecipient(BaseModel):
+    email: str
+    role: str
+    selected: bool = True
+
+
+class WeeklyApprovalDefaults(BaseModel):
+    start_date: date
+    end_date: date
+    period_key: str
+    timezone: str
+    schedule_note: str
+    recipients: list[WeeklyApprovalRecipient]
+    last_sent_at: datetime | None = None
+    last_sent_recipients: list[str] = []
+
+
+def _split_emails(raw: str | None) -> list[str]:
+    return [p.strip().lower() for p in (raw or "").split(",") if p.strip() and "@" in p]
+
+
+def _can_dispatch(current_user: User) -> bool:
+    user_role = current_user.role.name.lower() if current_user.role else ""
+    return any(r in user_role for r in ["admin", "super", "hr", "manager", "lead", "supervisor"])
+
+
+@router.get("/weekly-approval", response_model=WeeklyApprovalDefaults)
+async def weekly_approval_defaults(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> WeeklyApprovalDefaults:
+    """
+    Defaults for the admin "Approve & send weekly report" section: the Mon-Fri week that is
+    due, the HR / manager addresses configured for the Friday digest, and the last manual send.
+    """
+    if not _can_dispatch(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Only Administrators, HR and Managers can send the weekly report.",
+        )
+    org_id = current_user.organization_id
+    tz_name = (
+        await db.scalar(
+            select(ReportSchedule.timezone).where(
+                ReportSchedule.organization_id == org_id,
+                ReportSchedule.schedule_type == ReportType.WEEKLY,
+            )
+        )
+    ) or "Asia/Kolkata"
+    start_date, end_date, period_key = ReportSchedulerService.get_period_date_range(ReportType.WEEKLY, tz_name)
+
+    recipients: list[WeeklyApprovalRecipient] = []
+    seen: set[str] = set()
+
+    def _add(email: str, role: str) -> None:
+        key = email.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            recipients.append(WeeklyApprovalRecipient(email=key, role=role))
+
+    for addr in _split_emails(settings.WEEKLY_REPORT_HR_EMAILS):
+        _add(addr, "HR")
+    for addr in _split_emails(settings.WEEKLY_REPORT_MANAGER_EMAILS):
+        _add(addr, "Manager")
+    try:
+        for user in await ReportSchedulerService.get_org_report_recipients(db, org_id):
+            if user.email:
+                _add(user.email, "Admin / HR")
+    except Exception:
+        logger.exception("Could not load org report recipients for weekly approval defaults")
+
+    last_sent_at: datetime | None = None
+    last_sent_recipients: list[str] = []
+    recent = (
+        await db.execute(
+            select(ReportJob)
+            .where(ReportJob.organization_id == org_id, ReportJob.report_type == ReportType.WEEKLY)
+            .order_by(desc(ReportJob.created_at))
+            .limit(20)
+        )
+    ).scalars().all()
+    for job in recent:
+        params = job.parameters_json or {}
+        if params.get("manual_dispatch") and params.get("start_date") == str(start_date):
+            last_sent_at = job.completed_at or job.created_at
+            last_sent_recipients = list(params.get("sent_recipients") or params.get("recipients") or [])
+            break
+
+    return WeeklyApprovalDefaults(
+        start_date=start_date,
+        end_date=end_date,
+        period_key=period_key,
+        timezone=tz_name,
+        schedule_note="Automatic send: Friday 7:30 PM IST. Approve here to send it now.",
+        recipients=recipients,
+        last_sent_at=last_sent_at,
+        last_sent_recipients=last_sent_recipients,
+    )
+
+
 @router.post("/manual-send", response_model=ManualReportSendResponse, status_code=status.HTTP_201_CREATED)
 async def manual_send_report(
     payload: ManualReportSendRequest,
@@ -337,116 +442,159 @@ async def manual_send_report(
     db: AsyncSession = Depends(get_db),
 ) -> ManualReportSendResponse:
     """
-    Allows Admin and HR to immediately generate the 9-worksheet Excel report
-    and dispatch it directly to configured recipient emails.
+    Allows Admin and HR to approve and immediately generate the 9-worksheet Excel report
+    and dispatch it directly to the chosen recipient emails.
     """
-    user_role = current_user.role.name.lower() if current_user.role else ""
-    is_admin_or_hr = any(r in user_role for r in ["admin", "super", "hr", "manager", "lead", "supervisor"])
-    if not is_admin_or_hr:
+    if not _can_dispatch(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied: Only Administrators, HR and Managers can manually dispatch consolidated reports.",
         )
 
-    if not payload.recipients:
+    recipients: list[str] = []
+    for raw in payload.recipients:
+        email = (raw or "").strip().lower()
+        if email and "@" in email and email not in recipients:
+            recipients.append(email)
+    if not recipients:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="At least one recipient email address must be provided.",
+            detail="At least one valid recipient email address must be provided.",
+        )
+    if payload.end_date < payload.start_date:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="End date must be on or after the start date.",
         )
 
     now = datetime.now(UTC)
     org_id = current_user.organization_id
-
-    sched_tz = await db.scalar(
-        select(ReportSchedule.timezone).where(
-            ReportSchedule.organization_id == org_id,
-            ReportSchedule.schedule_type == payload.report_type,
-        )
-    )
-    dataset = await build_report_dataset(db, org_id, payload.start_date, payload.end_date, sched_tz or "UTC")
-
-    # 4. Create Job Record
-    job = ReportJob(
-        organization_id=org_id,
-        requester_id=current_user.id,
-        report_type=payload.report_type,
-        status=ReportStatus.COMPLETED,
-        parameters_json={
-            "start_date": str(payload.start_date),
-            "end_date": str(payload.end_date),
-            "recipients": payload.recipients,
-            "manual_dispatch": True,
-        },
-        started_at=now,
-        completed_at=now,
-    )
-    db.add(job)
-    await db.flush()
-
-    # 5. Generate 9-Worksheet Report
-    # Explicit query: lazy-loading current_user.organization inside an async session raises MissingGreenlet (500).
-    org_name = (await db.scalar(select(Organization.name).where(Organization.id == org_id))) or "Enterprise"
-    report_title = f"Manual {payload.report_type.value.title()} Digest ({payload.start_date} to {payload.end_date})"
-
-    file_name, file_path, file_size = ExcelReportEngine.generate_weekly_consolidated_report(
-        job_id=job.id,
-        org_name=org_name,
-        report_title=report_title,
-        start_date=payload.start_date,
-        end_date=payload.end_date,
-        employees_data=dataset.employees_data,
-        attendance_logs=dataset.attendance_logs,
-        os_events=dataset.os_events,
-        leaves_data=dataset.leaves_data,
-        wifi_logs=dataset.wifi_logs,
-        exceptions_data=dataset.exceptions_data,
-    )
-    stats = dataset.stats("Consolidated Organization")
-
-    rep_file = ReportFile(
-        report_job_id=job.id,
-        file_name=file_name,
-        storage_path=file_path,
-        file_size_bytes=file_size,
-        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        expires_at=now + timedelta(days=90),
-    )
-    db.add(rep_file)
-    await db.flush()
-
-    # 6. Dispatch to all recipient emails with attachment
-    dispatched_recipients = []
-    for r_email in payload.recipients:
-        clean_email = r_email.strip().lower()
-        if not clean_email or "@" not in clean_email:
-            continue
-        try:
-            await EmailService.notify_attendance_report(
-                db=db,
-                organization_id=org_id,
-                recipient_email=clean_email,
-                recipient_name=clean_email.split("@")[0].title(),
-                report_frequency="WEEKLY",
-                date_str=f"{payload.start_date} to {payload.end_date}",
-                attachment_path=file_path,
-                attachment_filename=file_name,
-                stats=stats,
+    step = "start"
+    try:
+        step = "load schedule timezone"
+        sched_tz = await db.scalar(
+            select(ReportSchedule.timezone).where(
+                ReportSchedule.organization_id == org_id,
+                ReportSchedule.schedule_type == payload.report_type,
             )
-            dispatched_recipients.append(clean_email)
-        except Exception as exc:
-            import traceback
-            traceback.print_exc()
-            continue
+        )
 
-    await db.commit()
+        step = "build report data"
+        dataset = await build_report_dataset(
+            db, org_id, payload.start_date, payload.end_date, sched_tz or "Asia/Kolkata"
+        )
 
+        step = "create report job"
+        job = ReportJob(
+            organization_id=org_id,
+            requester_id=current_user.id,
+            report_type=payload.report_type,
+            status=ReportStatus.COMPLETED,
+            parameters_json={
+                "start_date": str(payload.start_date),
+                "end_date": str(payload.end_date),
+                "recipients": recipients,
+                "manual_dispatch": True,
+                "approved_by": str(current_user.id),
+            },
+            started_at=now,
+            completed_at=now,
+        )
+        db.add(job)
+        await db.flush()
+
+        step = "load organization name"
+        # Explicit query: lazy-loading current_user.organization in an async session raises MissingGreenlet.
+        org_name = (await db.scalar(select(Organization.name).where(Organization.id == org_id))) or "Enterprise"
+        report_title = f"Manual {payload.report_type.value.title()} Digest ({payload.start_date} to {payload.end_date})"
+
+        step = "generate Excel workbook"
+        file_name, file_path, file_size = ExcelReportEngine.generate_weekly_consolidated_report(
+            job_id=job.id,
+            org_name=org_name,
+            report_title=report_title,
+            start_date=payload.start_date,
+            end_date=payload.end_date,
+            employees_data=dataset.employees_data,
+            attendance_logs=dataset.attendance_logs,
+            os_events=dataset.os_events,
+            leaves_data=dataset.leaves_data,
+            wifi_logs=dataset.wifi_logs,
+            exceptions_data=dataset.exceptions_data,
+        )
+        stats = dataset.stats("Consolidated Organization")
+
+        step = "save report file record"
+        rep_file = ReportFile(
+            report_job_id=job.id,
+            file_name=file_name,
+            storage_path=file_path,
+            file_size_bytes=file_size,
+            mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            expires_at=now + timedelta(days=90),
+        )
+        db.add(rep_file)
+        await db.flush()
+        job_id, file_id = job.id, rep_file.id
+
+        step = "save report job"
+        await db.commit()  # EmailService commits internally; persist the job and file first.
+
+        step = "queue emails"
+        dispatched: list[str] = []
+        failed: list[dict[str, str]] = []
+        for email in recipients:
+            try:
+                await EmailService.notify_attendance_report(
+                    db=db,
+                    organization_id=org_id,
+                    recipient_email=email,
+                    recipient_name=email.split("@")[0].title(),
+                    report_frequency=payload.report_type.value,
+                    date_str=f"{payload.start_date} to {payload.end_date}",
+                    attachment_path=file_path,
+                    attachment_filename=file_name,
+                    stats=stats,
+                )
+                dispatched.append(email)
+            except Exception as exc:  # one bad address must not block the others
+                logger.exception("Weekly report email to %s failed", email)
+                await db.rollback()
+                failed.append({"email": email, "error": f"{type(exc).__name__}: {exc}"})
+
+        step = "record send result"
+        job.parameters_json = {**(job.parameters_json or {}), "sent_recipients": dispatched}
+        if not dispatched:
+            job.status = ReportStatus.FAILED
+            job.error_message = "No email could be queued: " + "; ".join(f["error"] for f in failed)
+        await db.commit()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Manual report send failed at step '%s'", step)
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Report send failed while trying to {step}: {type(exc).__name__}: {exc}",
+        ) from exc
+
+    if not dispatched:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Report was generated but no email could be sent: "
+            + "; ".join(f"{f['email']} ({f['error']})" for f in failed),
+        )
+
+    message = f"Weekly report approved and sent to {len(dispatched)} recipient(s): {', '.join(dispatched)}."
+    if failed:
+        message += f" Failed for: {', '.join(f['email'] for f in failed)}."
     return ManualReportSendResponse(
-        job_id=job.id,
-        file_id=rep_file.id,
+        job_id=job_id,
+        file_id=file_id,
         file_name=file_name,
-        recipients=dispatched_recipients,
-        status="DISPATCHED",
+        recipients=dispatched,
+        failed_recipients=failed,
+        status="DISPATCHED" if not failed else "PARTIAL",
         timestamp=now,
-        message=f"Consolidated Excel report successfully generated and dispatched to {len(dispatched_recipients)} recipient(s).",
+        message=message,
     )
-

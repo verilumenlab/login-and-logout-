@@ -522,3 +522,26 @@ async def test_report_preview_and_manual_dispatch_api(client: AsyncClient, setup
     assert send_data["status"] == "DISPATCHED"
     assert len(send_data["recipients"]) == 2
     assert "weekly_consolidated" in send_data["file_name"]
+
+    # 3. Approval defaults: Mon-Fri week + configured HR / manager addresses
+    defaults_res = await client.get("/api/v1/reports/weekly-approval", headers=admin_headers)
+    assert defaults_res.status_code == 200
+    defaults = defaults_res.json()
+    start = date.fromisoformat(defaults["start_date"])
+    end = date.fromisoformat(defaults["end_date"])
+    assert start.weekday() == 0 and end.weekday() == 4
+    emails = {r["email"] for r in defaults["recipients"]}
+    assert "satish@verilumen.ai" in emails and "kp@verilumen.ai" in emails
+
+    # 4. Duplicate / invalid recipients are cleaned; no valid recipient is rejected
+    bad_res = await client.post(
+        "/api/v1/reports/manual-send",
+        json={
+            "report_type": "WEEKLY",
+            "start_date": "2026-11-06",
+            "end_date": "2026-11-13",
+            "recipients": ["not-an-email", "  "],
+        },
+        headers=admin_headers,
+    )
+    assert bad_res.status_code == 400
