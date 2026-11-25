@@ -75,3 +75,11 @@ backend/storage/
 
 # Built employee installers
 installer/
+
+# Desktop build output / local env
+desktop/release/
+desktop/release-*/
+desktop/dist-standalone/
+desktop/.env.production
+desktop/[0-9][0-9][0-9][0-9]
+backend/storage/
